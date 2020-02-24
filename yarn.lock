@@ -1603,9 +1603,10 @@ caseless@~0.12.0:
   version "0.12.0"
   resolved "https://registry.yarnpkg.com/caseless/-/caseless-0.12.0.tgz#1b681c21ff84033c826543090689420d187151dc"
 
-cfb@^1.0.7:
-  version "1.1.0"
-  resolved "https://registry.yarnpkg.com/cfb/-/cfb-1.1.0.tgz#44fb1b30eee014fa5633a0ed5f26c87fd765799a"
+cfb@^1.1.0:
+  version "1.1.3"
+  resolved "https://registry.yarnpkg.com/cfb/-/cfb-1.1.3.tgz#05de6816259c8e8bc32713aba905608ee385df66"
+  integrity sha512-joXBW0nMuwV9no7UTMiyVJnQL6XIU3ThXVjFUDHgl9MpILPOomyfaGqC290VELZ48bbQKZXnQ81UT5HouTxHsw==
   dependencies:
     adler-32 "~1.2.0"
     commander "^2.16.0"
@@ -9093,13 +9094,14 @@ xdg-basedir@^3.0.0:
   version "3.0.0"
   resolved "https://registry.yarnpkg.com/xdg-basedir/-/xdg-basedir-3.0.0.tgz#496b2cc109eca8dbacfe2dc72b603c17c5870ad4"
 
-xlsx-populate@^1.14.0:
-  version "1.17.0"
-  resolved "https://registry.yarnpkg.com/xlsx-populate/-/xlsx-populate-1.17.0.tgz#af48ab54f83badd81d6114f3d4f7b0af6a0d839d"
+xlsx-populate@^1.20.1:
+  version "1.20.1"
+  resolved "https://registry.yarnpkg.com/xlsx-populate/-/xlsx-populate-1.20.1.tgz#71714a0b3efd0c928f24038002286255bf01fc0a"
+  integrity sha512-128l+3CWPJaI0keGQ6G6HaqWhHdQ8AbfhX7G/Ouy/uq5yKv/O6hJOg+IqJp8zOcx9eLimVIfyNVyjZmEZ0Zhcw==
   dependencies:
-    cfb "^1.0.7"
+    cfb "^1.1.0"
     jszip "^3.1.5"
-    lodash "^4.17.10"
+    lodash "^4.17.11"
     sax "^1.2.4"
 
 xml-name-validator@^2.0.1:
