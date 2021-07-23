@@ -53,7 +53,7 @@
     ]
   },
   "dependencies": {
-    "@axelspringer/graphql-google-pubsub": "^1.2.1",
+    "@axelspringer/graphql-google-pubsub": "^2.0.0",
     "@google-cloud/pubsub": "0.18.0",
     "@google-cloud/storage": "^2.5.0",
     "apollo-server-express": "^2.3.1",
