@@ -78,7 +78,7 @@
     "ioredis": "^3.2.2",
     "jsonwebtoken": "^8.1.0",
     "meteor-random": "^0.0.3",
-    "moment": "^2.18.1",
+    "moment": "^2.29.2",
     "mongoose": "^5.2.16",
     "mongoose-type-email": "^1.0.5",
     "node-schedule": "^1.2.5",
