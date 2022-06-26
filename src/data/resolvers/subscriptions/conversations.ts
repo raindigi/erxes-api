@@ -30,6 +30,18 @@ export default {
   },
 
   /*
+   * Show typing while waiting Bot response
+   */
+  conversationBotTypingStatus: {
+    subscribe: withFilter(
+      () => graphqlPubsub.asyncIterator('conversationBotTypingStatus'),
+      async (payload, variables) => {
+        return payload.conversationBotTypingStatus.conversationId === variables._id;
+      },
+    ),
+  },
+
+  /*
    * Admin is listening for this subscription to show typing notification
    */
   conversationClientTypingStatusChanged: {
@@ -62,7 +74,7 @@ export default {
           return false;
         }
 
-        const availableChannelsCount = await Channels.count({
+        const availableChannelsCount = await Channels.countDocuments({
           integrationIds: { $in: [integration._id] },
           memberIds: { $in: [variables.userId] },
         });
@@ -83,5 +95,12 @@ export default {
         return payload.conversationAdminMessageInserted.customerId === variables.customerId;
       },
     ),
+  },
+
+  /*
+   * Integrations api is listener
+   */
+  conversationExternalIntegrationMessageInserted: {
+    subscribe: () => graphqlPubsub.asyncIterator('conversationExternalIntegrationMessageInserted'),
   },
 };

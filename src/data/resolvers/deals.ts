@@ -1,40 +1,86 @@
-import { Companies, Customers, Pipelines, Products, Stages, Users } from '../../db/models';
+import {
+  Companies,
+  Conformities,
+  Customers,
+  Fields,
+  Notifications,
+  PipelineLabels,
+  Pipelines,
+  Products,
+  Stages,
+  Users,
+} from '../../db/models';
 import { IDealDocument } from '../../db/models/definitions/deals';
-import { IUserDocument } from '../../db/models/definitions/users';
+import { IContext } from '../types';
 import { boardId } from './boardUtils';
 
 export default {
-  companies(deal: IDealDocument) {
-    return Companies.find({ _id: { $in: deal.companyIds || [] } });
+  async companies(deal: IDealDocument) {
+    const companyIds = await Conformities.savedConformity({
+      mainType: 'deal',
+      mainTypeId: deal._id,
+      relTypes: ['company'],
+    });
+
+    return Companies.find({ _id: { $in: companyIds } });
   },
 
-  customers(deal: IDealDocument) {
-    return Customers.find({ _id: { $in: deal.customerIds || [] } });
+  async customers(deal: IDealDocument) {
+    const customerIds = await Conformities.savedConformity({
+      mainType: 'deal',
+      mainTypeId: deal._id,
+      relTypes: ['customer'],
+    });
+
+    return Customers.find({ _id: { $in: customerIds } });
   },
 
   async products(deal: IDealDocument) {
     const products: any = [];
 
     for (const data of deal.productsData || []) {
-      const product = await Products.findOne({ _id: data.productId });
-
-      // Add product object to resulting list
-      if (data && product) {
-        products.push({
-          ...data.toJSON(),
-          product: product.toJSON(),
-        });
+      if (!data.productId) {
+        continue;
       }
+
+      const product = await Products.getProduct({ _id: data.productId });
+
+      const { customFieldsData } = product;
+
+      const customFields = [];
+
+      for (const customFieldData of customFieldsData || []) {
+        const field = await Fields.findOne({ _id: customFieldData.field });
+
+        if (field) {
+          customFields[customFieldData.field] = {
+            text: field.text,
+            data: customFieldData.value,
+          };
+        }
+      }
+
+      product.customFieldsData = customFields;
+
+      products.push({
+        ...(typeof data.toJSON === 'function' ? data.toJSON() : data),
+        product,
+      });
     }
 
     return products;
   },
 
   amount(deal: IDealDocument) {
-    const data = deal.productsData || [];
+    const productsData = deal.productsData || [];
     const amountsMap = {};
 
-    data.forEach(product => {
+    productsData.forEach(product => {
+      // Tick paid or used is false then exclude
+      if (!product.tickUsed) {
+        return;
+      }
+
       const type = product.currency;
 
       if (type) {
@@ -50,15 +96,11 @@ export default {
   },
 
   assignedUsers(deal: IDealDocument) {
-    return Users.find({ _id: { $in: deal.assignedUserIds } });
+    return Users.find({ _id: { $in: deal.assignedUserIds || [] } });
   },
 
   async pipeline(deal: IDealDocument) {
-    const stage = await Stages.findOne({ _id: deal.stageId });
-
-    if (!stage) {
-      return null;
-    }
+    const stage = await Stages.getStage(deal.stageId);
 
     return Pipelines.findOne({ _id: stage.pipelineId });
   },
@@ -68,16 +110,28 @@ export default {
   },
 
   stage(deal: IDealDocument) {
-    return Stages.findOne({ _id: deal.stageId });
+    return Stages.getStage(deal.stageId);
   },
 
-  isWatched(deal: IDealDocument, _args, { user }: { user: IUserDocument }) {
+  isWatched(deal: IDealDocument, _args, { user }: IContext) {
     const watchedUserIds = deal.watchedUserIds || [];
 
-    if (watchedUserIds.includes(user._id)) {
+    if (watchedUserIds && watchedUserIds.includes(user._id)) {
       return true;
     }
 
     return false;
+  },
+
+  hasNotified(deal: IDealDocument, _args, { user }: IContext) {
+    return Notifications.checkIfRead(user._id, deal._id);
+  },
+
+  labels(deal: IDealDocument) {
+    return PipelineLabels.find({ _id: { $in: deal.labelIds || [] } });
+  },
+
+  createdUser(deal: IDealDocument) {
+    return Users.findOne({ _id: deal.userId });
   },
 };

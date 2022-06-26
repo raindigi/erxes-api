@@ -21,21 +21,52 @@ export const types = `
     members: [User]
     bgColor: String
     isWatched: Boolean
+    itemsTotalCount: Int
+
+    startDate: Date
+    endDate: Date
+    metric: String
+    hackScoringType: String
+    templateId: String
+    state: String
+    isCheckUser: Boolean
+    excludeCheckUserIds: [String]
     ${commonTypes}
   }
 
   type Stage {
     _id: String!
     name: String!
-    probability: String
     pipelineId: String!
+    probability: String
+    status: String
     amount: JSON
     itemsTotalCount: Int
     compareNextStage: JSON
     stayedDealsTotalCount: Int
     initialDealsTotalCount: Int
     inProcessDealsTotalCount: Int
+    formId: String
     ${commonTypes}
+  }
+
+  type PipelineChangeResponse {
+    _id: String
+    proccessId: String
+    action: String
+    data: JSON
+  }
+
+  type ConvertTo {
+    ticketUrl: String,
+    dealUrl: String,
+    taskUrl: String,
+  }
+
+  type BoardCount {
+    _id: String
+    name: String
+    count: Int
   }
 
   input ItemDate {
@@ -44,27 +75,34 @@ export const types = `
   }
 `;
 
+const stageParams = `
+  search: String,
+  companyIds: [String]
+  customerIds: [String]
+  assignedUserIds: [String]
+  labelIds: [String]
+  extraParams: JSON,
+  closeDateType: String
+`;
+
 export const queries = `
   boards(type: String!): [Board]
+  boardCounts(type: String!): [BoardCount]
   boardGetLast(type: String!): Board
   boardDetail(_id: String!): Board
-  pipelines(boardId: String!): [Pipeline]
+  pipelines(boardId: String, type: String, page: Int, perPage: Int): [Pipeline]
   pipelineDetail(_id: String!): Pipeline
   stages(
     isNotLost: Boolean,
+    isAll: Boolean,
     pipelineId: String!,
-    search: String,
-    companyIds: [String],
-    customerIds: [String],
-    assignedUserIds: [String],
-    extraParams: JSON,
-    nextDay: String,
-    nextWeek: String,
-    nextMonth: String,
-    noCloseDate: String,
-    overdue: String,
+    ${stageParams}
   ): [Stage]
-  stageDetail(_id: String!): Stage
+  stageDetail(_id: String!, ${stageParams}): Stage
+  convertToInfo(conversationId: String!): ConvertTo
+  pipelineStateCount(boardId: String, type: String): JSON
+  archivedStages(pipelineId: String!, search: String, page: Int, perPage: Int): [Stage]
+  archivedStagesCount(pipelineId: String!, search: String): Int
 `;
 
 const commonParams = `
@@ -79,7 +117,14 @@ const pipelineParams = `
   stages: JSON,
   visibility: String!,
   memberIds: [String],
-  bgColor: String
+  bgColor: String,
+  startDate: Date,
+  endDate: Date,
+  metric: String,
+  hackScoringType: String,
+  templateId: String,
+  isCheckUser: Boolean
+  excludeCheckUserIds: [String],
 `;
 
 export const mutations = `
@@ -95,4 +140,5 @@ export const mutations = `
 
   stagesUpdateOrder(orders: [OrderItem]): [Stage]
   stagesRemove(_id: String!): JSON
+  stagesEdit(_id: String!, type: String, name: String, status: String): Stage
 `;

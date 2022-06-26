@@ -1,55 +1,66 @@
-import { Companies, Conversations, Deals, Integrations, Tags, Users } from '../../db/models';
+import { Companies, Conformities, Conversations, Integrations, Tags, Users } from '../../db/models';
 import { ICustomerDocument } from '../../db/models/definitions/customers';
-
-interface IMessengerCustomData {
-  name: string;
-  value: string;
-}
+import { fetchElk } from '../../elasticsearch';
 
 export default {
   integration(customer: ICustomerDocument) {
     return Integrations.findOne({ _id: customer.integrationId });
   },
 
-  getIntegrationData(customer: ICustomerDocument) {
-    return {
-      messenger: customer.messengerData || {},
-      // TODO: Add other integration data
-    };
-  },
-
-  getMessengerCustomData(customer: ICustomerDocument) {
-    const results: IMessengerCustomData[] = [];
-    const messengerData: any = customer.messengerData || {};
-    const data = messengerData.customData || {};
-
-    Object.keys(data).forEach(key => {
-      results.push({
-        name: key.replace(/_/g, ' '),
-        value: data[key],
-      });
-    });
-
-    return results;
-  },
-
   getTags(customer: ICustomerDocument) {
     return Tags.find({ _id: { $in: customer.tagIds || [] } });
+  },
+
+  async urlVisits(customer: ICustomerDocument) {
+    const response = await fetchElk(
+      'search',
+      'events',
+      {
+        _source: ['createdAt', 'count', 'attributes'],
+        query: {
+          bool: {
+            must: [
+              {
+                term: { customerId: customer._id },
+              },
+              {
+                term: { name: 'viewPage' },
+              },
+            ],
+          },
+        },
+      },
+      '',
+      { hits: { hits: [] } },
+    );
+
+    return response.hits.hits.map(hit => {
+      const source = hit._source;
+      const firstAttribute = source.attributes[0] || {};
+
+      return {
+        createdAt: source.createdAt,
+        count: source.count,
+        url: firstAttribute.value,
+      };
+    });
   },
 
   conversations(customer: ICustomerDocument) {
     return Conversations.find({ customerId: customer._id });
   },
 
-  companies(customer: ICustomerDocument) {
-    return Companies.find({ _id: { $in: customer.companyIds || [] } });
+  async companies(customer: ICustomerDocument) {
+    const companyIds = await Conformities.savedConformity({
+      mainType: 'customer',
+      mainTypeId: customer._id,
+      relTypes: ['company'],
+    });
+
+    return Companies.find({ _id: { $in: companyIds || [] } }).limit(10);
   },
 
   owner(customer: ICustomerDocument) {
     return Users.findOne({ _id: customer.ownerId });
-  },
-
-  deals(customer: ICustomerDocument) {
-    return Deals.find({ customerIds: { $in: [customer._id] } });
   },
 };

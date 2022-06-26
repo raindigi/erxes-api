@@ -1,7 +1,6 @@
 import {
   boardFactory,
-  companyFactory,
-  customerFactory,
+  conversationFactory,
   pipelineFactory,
   stageFactory,
   taskFactory,
@@ -38,6 +37,18 @@ describe('Test tasks model', () => {
     await Tasks.deleteMany({});
   });
 
+  test('Get task', async () => {
+    try {
+      await Tasks.getTask('fakeId');
+    } catch (e) {
+      expect(e.message).toBe('Task not found');
+    }
+
+    const response = await Tasks.getTask(task._id);
+
+    expect(response).toBeDefined();
+  });
+
   // Test task
   test('Create task', async () => {
     const createdTask = await Tasks.createTask({
@@ -47,8 +58,28 @@ describe('Test tasks model', () => {
 
     expect(createdTask).toBeDefined();
     expect(createdTask.stageId).toEqual(stage._id);
-    expect(createdTask.createdAt).toEqual(task.createdAt);
     expect(createdTask.userId).toEqual(user._id);
+  });
+
+  test('Create task Error(`Already converted a task`)', async () => {
+    const conversation = await conversationFactory();
+
+    const args = {
+      stageId: task.stageId,
+      userId: user._id,
+      sourceConversationId: conversation._id,
+    };
+
+    const createdTicket = await Tasks.createTask(args);
+
+    expect(createdTicket).toBeDefined();
+
+    // Already converted a task
+    try {
+      await Tasks.createTask(args);
+    } catch (e) {
+      expect(e.message).toBe('Already converted a task');
+    }
   });
 
   test('Update task', async () => {
@@ -62,78 +93,26 @@ describe('Test tasks model', () => {
     expect(updatedTask.closeDate).toEqual(task.closeDate);
   });
 
-  test('Update task orders', async () => {
-    const dealToOrder = await taskFactory({});
+  test('Watch task', async () => {
+    await Tasks.watchTask(task._id, true, user._id);
 
-    const [updatedTask, updatedDealToOrder] = await Tasks.updateOrder(stage._id, [
-      { _id: task._id, order: 9 },
-      { _id: dealToOrder._id, order: 3 },
-    ]);
+    const watchedTask = await Tasks.getTask(task._id);
 
-    expect(updatedTask.stageId).toBe(stage._id);
-    expect(updatedTask.order).toBe(3);
-    expect(updatedDealToOrder.order).toBe(9);
+    expect(watchedTask.watchedUserIds).toContain(user._id);
+
+    // testing unwatch
+    await Tasks.watchTask(task._id, false, user._id);
+
+    const unwatchedTask = await Tasks.getTask(task._id);
+
+    expect(unwatchedTask.watchedUserIds).not.toContain(user._id);
   });
 
-  test('Remove task', async () => {
-    const isDeleted = await Tasks.removeTask(task.id);
+  test('Test removeTasks()', async () => {
+    await Tasks.removeTasks([task._id]);
 
-    expect(isDeleted).toBeTruthy();
-  });
+    const removed = await Tasks.findOne({ _id: task._id });
 
-  test('Remove task not found', async () => {
-    expect.assertions(1);
-
-    const fakeDealId = 'fakeDealId';
-
-    try {
-      await Tasks.removeTask(fakeDealId);
-    } catch (e) {
-      expect(e.message).toEqual('Task not found');
-    }
-  });
-
-  test('Task change customer', async () => {
-    const newCustomer = await customerFactory({});
-
-    const customer1 = await customerFactory({});
-    const customer2 = await customerFactory({});
-    const dealObj = await taskFactory({
-      customerIds: [customer2._id, customer1._id],
-    });
-
-    await Tasks.changeCustomer(newCustomer._id, [customer2._id, customer1._id]);
-
-    const result = await Tasks.findOne({ _id: dealObj._id });
-
-    if (!result) {
-      throw new Error('Task not found');
-    }
-
-    expect(result.customerIds).toContain(newCustomer._id);
-    expect(result.customerIds).not.toContain(customer1._id);
-    expect(result.customerIds).not.toContain(customer2._id);
-  });
-
-  test('Task change company', async () => {
-    const newCompany = await companyFactory({});
-
-    const company1 = await companyFactory({});
-    const company2 = await companyFactory({});
-    const dealObj = await taskFactory({
-      companyIds: [company1._id, company2._id],
-    });
-
-    await Tasks.changeCompany(newCompany._id, [company1._id, company2._id]);
-
-    const result = await Tasks.findOne({ _id: dealObj._id });
-
-    if (!result) {
-      throw new Error('Task not found');
-    }
-
-    expect(result.companyIds).toContain(newCompany._id);
-    expect(result.companyIds).not.toContain(company1._id);
-    expect(result.companyIds).not.toContain(company2._id);
+    expect(removed).toBe(null);
   });
 });

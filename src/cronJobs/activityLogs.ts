@@ -1,20 +1,30 @@
+import * as dotenv from 'dotenv';
 import * as schedule from 'node-schedule';
-import QueryBuilder from '../data/modules/segments/queryBuilder';
-import { ActivityLogs, Customers, Segments } from '../db/models';
+import { fetchBySegments } from '../data/modules/segments/queryBuilder';
+import { connect } from '../db/connection';
+import { ActivityLogs, Companies, Customers, Segments } from '../db/models';
 
 /**
  * Send conversation messages to customer
  */
+dotenv.config();
+
 export const createActivityLogsFromSegments = async () => {
+  await connect();
   const segments = await Segments.find({});
 
   for (const segment of segments) {
-    const selector = await QueryBuilder.segments(segment);
-    const customers = await Customers.find(selector);
+    const ids = await fetchBySegments(segment);
 
-    for (const customer of customers) {
-      await ActivityLogs.createSegmentLog(segment, customer);
-    }
+    const customers = await Customers.find({ _id: { $in: ids } }, { _id: 1 });
+    const customerIds = customers.map(c => c._id);
+
+    const companies = await Companies.find({ _id: { $in: ids } }, { _id: 1 });
+    const companyIds = companies.map(c => c._id);
+
+    await ActivityLogs.createSegmentLog(segment, customerIds, 'customer');
+
+    await ActivityLogs.createSegmentLog(segment, companyIds, 'company');
   }
 };
 

@@ -6,15 +6,7 @@ export const types = `
     position: String
     location: String
     description: String
-  }
-
-  input UserLinks {
-    linkedIn: String
-    twitter: String
-    facebook: String
-    youtube: String
-    github: String
-    website: String
+    operatorPhone: String
   }
 
   input EmailSignature {
@@ -24,6 +16,7 @@ export const types = `
 
   input InvitationEntry {
     email: String
+    password: String
     groupId: String
   }
 
@@ -34,32 +27,30 @@ export const types = `
     position: String
     location: String
     description: String
-  }
-
-  type UserLinksType {
-    linkedIn: String
-    twitter: String
-    facebook: String
-    github: String
-    youtube: String
-    website: String
+    operatorPhone: String
   }
 
   type User {
     _id: String!
+    createdAt: Date
     username: String
     email: String
     isActive: Boolean
     details: UserDetailsType
-    links: UserLinksType
+    links: JSON
     status: String
-    hasSeenOnBoard: Boolean
     emailSignatures: JSON
     getNotificationByEmail: Boolean
     groupIds: [String]
+    brandIds: [String]
+    doNotDisturb: String
 
+    brands: [Brand]
     isOwner: Boolean
     permissionActions: JSON
+    configs: JSON
+    configsConstants: [JSON]
+    onboardingHistory: OnboardingHistory
   }
 
   type UserConversationListResponse {
@@ -72,19 +63,23 @@ const commonParams = `
   username: String!,	
   email: String!,	
   details: UserDetails,	
-  links: UserLinks,	
+  links: JSON,	
   channelIds: [String],	
   groupIds: [String]
+  brandIds: [String]
 `;
 
 const commonSelector = `
   searchValue: String,
   isActive: Boolean,
-  ids: [String]
+  requireUsername: Boolean,
+  ids: [String],
+  brandIds: [String]
 `;
 
 export const queries = `
   users(page: Int, perPage: Int, status: String ${commonSelector}): [User]
+  allUsers(isActive: Boolean): [User]
   userDetail(_id: String): User
   usersTotalCount(${commonSelector}): Int
   currentUser: User
@@ -92,15 +87,17 @@ export const queries = `
 `;
 
 export const mutations = `
+  usersCreateOwner(email: String!, password: String!, firstName: String!, lastName: String, subscribeEmail: Boolean): String 
   login(email: String!, password: String! deviceToken: String): String 
   logout: String
   forgotPassword(email: String!): String!
   resetPassword(token: String!, newPassword: String!): JSON
+  usersResetMemberPassword(_id: String!, newPassword: String!): User
   usersEditProfile(
     username: String!,
     email: String!,
     details: UserDetails,
-    links: UserLinks
+    links: JSON
     password: String!
   ): User
   usersEdit(_id: String!, ${commonParams}): User

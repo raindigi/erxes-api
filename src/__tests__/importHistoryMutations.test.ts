@@ -1,26 +1,14 @@
-import * as sinon from 'sinon';
 import { graphqlRequest } from '../db/connection';
-import { customerFactory, importHistoryFactory, userFactory } from '../db/factories';
-import { ImportHistory, Users } from '../db/models';
-import * as workerUtils from '../workers/utils';
+import { customerFactory, importHistoryFactory } from '../db/factories';
+import { ImportHistory } from '../db/models';
+import messageBroker from '../messageBroker';
 
 import './setup.ts';
 
 describe('Import history mutations', () => {
-  let _user;
-  let context;
-
-  beforeEach(async () => {
-    // Creating test data
-    _user = await userFactory({});
-
-    context = { user: _user };
-  });
-
   afterEach(async () => {
     // Clearing test data
     await ImportHistory.deleteMany({});
-    await Users.deleteMany({});
   });
 
   test('Remove import histories', async () => {
@@ -29,24 +17,55 @@ describe('Import history mutations', () => {
         importHistoriesRemove(_id: $_id)
       }
     `;
+
+    const spy = jest.spyOn(messageBroker(), 'sendRPCMessage');
+    spy.mockImplementation(() => Promise.resolve({ status: 'ok' }));
+
     const customer = await customerFactory({});
 
-    const importHistory = await importHistoryFactory({
-      ids: [customer._id],
-    });
+    const customerHistory = await importHistoryFactory({ ids: [customer._id], contentType: 'customer' });
 
-    const mock = sinon.stub(workerUtils, 'createWorkers').callsFake();
-
-    await graphqlRequest(mutation, 'importHistoriesRemove', { _id: importHistory._id }, context);
-
-    const historyObj = await ImportHistory.findOne({ _id: importHistory._id });
-
-    if (!historyObj) {
-      throw new Error('History not found');
-    }
+    await graphqlRequest(mutation, 'importHistoriesRemove', { _id: customerHistory._id });
+    const historyObj = await ImportHistory.getImportHistory(customerHistory._id);
 
     expect(historyObj.status).toBe('Removing');
 
-    mock.restore();
+    spy.mockRestore();
+  });
+
+  test('Remove import histories (Error)', async () => {
+    const mutation = `
+      mutation importHistoriesRemove($_id: String!) {
+        importHistoriesRemove(_id: $_id)
+      }
+    `;
+
+    const spy = jest.spyOn(messageBroker(), 'sendRPCMessage');
+    spy.mockImplementation(() => Promise.resolve({ status: 'error', message: 'Workers are busy' }));
+
+    const customer = await customerFactory({});
+    const importHistory = await importHistoryFactory({ ids: [customer._id] });
+
+    try {
+      await graphqlRequest(mutation, 'importHistoriesRemove', { _id: importHistory._id });
+    } catch (e) {
+      expect(e[0].message).toBe('Workers are busy');
+    }
+
+    spy.mockRestore();
+  });
+
+  test('Cancel import history', async () => {
+    const mutation = `
+      mutation importHistoriesCancel($_id: String!) {
+        importHistoriesCancel(_id: $_id)
+      }
+    `;
+
+    const importHistory = await importHistoryFactory({});
+
+    const response = await graphqlRequest(mutation, 'importHistoriesCancel', { _id: importHistory._id });
+
+    expect(response).toBe(true);
   });
 });

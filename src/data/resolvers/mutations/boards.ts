@@ -1,7 +1,7 @@
 import { Boards, Pipelines, Stages } from '../../../db/models';
-import { IBoard, IOrderInput, IPipeline, IStageDocument } from '../../../db/models/definitions/boards';
-import { IUserDocument } from '../../../db/models/definitions/users';
-import { putCreateLog, putDeleteLog, putUpdateLog } from '../../utils';
+import { IBoard, IOrderInput, IPipeline, IStage, IStageDocument } from '../../../db/models/definitions/boards';
+import { putCreateLog, putDeleteLog, putUpdateLog } from '../../logUtils';
+import { IContext } from '../../types';
 import { checkPermission } from '../boardUtils';
 
 interface IBoardsEdit extends IBoard {
@@ -16,19 +16,25 @@ interface IPipelinesEdit extends IPipelinesAdd {
   _id: string;
 }
 
+interface IStageEdit extends IStage {
+  _id: string;
+}
+
 const boardMutations = {
   /**
    * Create new board
    */
-  async boardsAdd(_root, doc: IBoard, { user }: { user: IUserDocument }) {
+  async boardsAdd(_root, doc: IBoard, { user, docModifier }: IContext) {
     await checkPermission(doc.type, user, 'boardsAdd');
-    const board = await Boards.createBoard({ userId: user._id, ...doc });
+
+    const extendedDoc = docModifier({ userId: user._id, ...doc });
+
+    const board = await Boards.createBoard(extendedDoc);
 
     await putCreateLog(
       {
-        type: 'board',
-        newData: JSON.stringify(doc),
-        description: `${doc.name} has been created`,
+        type: `${doc.type}Boards`,
+        newData: extendedDoc,
         object: board,
       },
       user,
@@ -40,23 +46,21 @@ const boardMutations = {
   /**
    * Edit board
    */
-  async boardsEdit(_root, { _id, ...doc }: IBoardsEdit, { user }: { user: IUserDocument }) {
+  async boardsEdit(_root, { _id, ...doc }: IBoardsEdit, { user }: IContext) {
     await checkPermission(doc.type, user, 'boardsEdit');
 
-    const board = await Boards.findOne({ _id });
+    const board = await Boards.getBoard(_id);
     const updated = await Boards.updateBoard(_id, doc);
 
-    if (board) {
-      await putUpdateLog(
-        {
-          type: 'board',
-          newData: JSON.stringify(doc),
-          description: `${doc.name} has been edited`,
-          object: board,
-        },
-        user,
-      );
-    }
+    await putUpdateLog(
+      {
+        type: `${doc.type}Boards`,
+        newData: doc,
+        object: board,
+        updatedDocument: updated,
+      },
+      user,
+    );
 
     return updated;
   },
@@ -64,43 +68,59 @@ const boardMutations = {
   /**
    * Remove board
    */
-  async boardsRemove(_root, { _id }: { _id: string }, { user }: { user: IUserDocument }) {
-    const board = await Boards.findOne({ _id });
+  async boardsRemove(_root, { _id }: { _id: string }, { user }: IContext) {
+    const board = await Boards.getBoard(_id);
 
-    if (board) {
-      await checkPermission(board.type, user, 'boardsRemove');
-    }
+    await checkPermission(board.type, user, 'boardsRemove');
 
     const removed = await Boards.removeBoard(_id);
 
-    if (board && removed) {
-      await putDeleteLog(
-        {
-          type: 'board',
-          object: board,
-          description: `${board.name} has been removed`,
-        },
-        user,
-      );
-    }
+    await putDeleteLog({ type: `${board.type}Boards`, object: board }, user);
+
+    return removed;
   },
 
   /**
    * Create new pipeline
    */
-  async pipelinesAdd(_root, { stages, ...doc }: IPipelinesAdd, { user }: { user: IUserDocument }) {
+  async pipelinesAdd(_root, { stages, ...doc }: IPipelinesAdd, { user }: IContext) {
     await checkPermission(doc.type, user, 'pipelinesAdd');
 
-    return Pipelines.createPipeline({ userId: user._id, ...doc }, stages);
+    const pipeline = await Pipelines.createPipeline({ userId: user._id, ...doc }, stages);
+
+    await putCreateLog(
+      {
+        type: `${doc.type}Pipelines`,
+        newData: doc,
+        object: pipeline,
+      },
+      user,
+    );
+
+    return pipeline;
   },
 
   /**
    * Edit pipeline
    */
-  async pipelinesEdit(_root, { _id, stages, ...doc }: IPipelinesEdit, { user }: { user: IUserDocument }) {
+  async pipelinesEdit(_root, { _id, stages, ...doc }: IPipelinesEdit, { user }: IContext) {
     await checkPermission(doc.type, user, 'pipelinesEdit');
 
-    return Pipelines.updatePipeline(_id, doc, stages);
+    const pipeline = await Pipelines.getPipeline(_id);
+
+    const updated = await Pipelines.updatePipeline(_id, doc, stages);
+
+    await putUpdateLog(
+      {
+        type: `${doc.type}Pipelines`,
+        newData: doc,
+        object: pipeline,
+        updatedDocument: updated,
+      },
+      user,
+    );
+
+    return updated;
   },
 
   /**
@@ -113,18 +133,8 @@ const boardMutations = {
   /**
    * Watch pipeline
    */
-  async pipelinesWatch(
-    _root,
-    { _id, isAdd, type }: { _id: string; isAdd: boolean; type: string },
-    { user }: { user: IUserDocument },
-  ) {
+  async pipelinesWatch(_root, { _id, isAdd, type }: { _id: string; isAdd: boolean; type: string }, { user }: IContext) {
     await checkPermission(type, user, 'pipelinesWatch');
-
-    const pipeline = await Pipelines.findOne({ _id });
-
-    if (!pipeline) {
-      throw new Error('Pipeline not found');
-    }
 
     return Pipelines.watchPipeline(_id, isAdd, user._id);
   },
@@ -132,14 +142,16 @@ const boardMutations = {
   /**
    * Remove pipeline
    */
-  async pipelinesRemove(_root, { _id }: { _id: string }, { user }: { user: IUserDocument }) {
-    const pipeline = await Pipelines.findOne({ _id });
+  async pipelinesRemove(_root, { _id }: { _id: string }, { user }: IContext) {
+    const pipeline = await Pipelines.getPipeline(_id);
 
-    if (pipeline) {
-      await checkPermission(pipeline.type, user, 'pipelinesRemove');
-    }
+    await checkPermission(pipeline.type, user, 'pipelinesRemove');
 
-    return Pipelines.removePipeline(_id);
+    const removed = await Pipelines.removePipeline(_id);
+
+    await putDeleteLog({ type: `${pipeline.type}Pipelines`, object: pipeline }, user);
+
+    return removed;
   },
 
   /**
@@ -147,6 +159,25 @@ const boardMutations = {
    */
   stagesUpdateOrder(_root, { orders }: { orders: IOrderInput[] }) {
     return Stages.updateOrder(orders);
+  },
+
+  /**
+   * Edit stage
+   */
+  async stagesEdit(_root, { _id, ...doc }: IStageEdit, { user }: IContext) {
+    await checkPermission(doc.type, user, 'stagesEdit');
+
+    return Stages.updateStage(_id, doc);
+  },
+
+  /**
+   * Remove stage
+   */
+  async stagesRemove(_root, { _id }: { _id: string }, { user }: IContext) {
+    const stage = await Stages.getStage(_id);
+    await checkPermission(stage.type, user, 'stagesRemove');
+
+    return Stages.removeStage(_id);
   },
 };
 

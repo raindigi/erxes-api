@@ -1,5 +1,5 @@
 import { Document, Schema } from 'mongoose';
-import { field } from '../utils';
+import { field, schemaWrapper } from './utils';
 
 export interface IScript {
   name: string;
@@ -12,14 +12,17 @@ export interface IScript {
 
 export interface IScriptDocument extends IScript, Document {
   _id: string;
+  scopeBrandIds?: string[];
 }
 
-export const scriptSchema = new Schema({
-  _id: field({ pkey: true }),
-  name: field({ type: String }),
-  messengerId: field({ type: String }),
-  messengerBrandCode: field({ type: String }),
-  kbTopicId: field({ type: String }),
-  leadIds: field({ type: [String] }),
-  leadMaps: field({ type: [Object] }),
-});
+export const scriptSchema = schemaWrapper(
+  new Schema({
+    _id: field({ pkey: true }),
+    name: field({ type: String, label: 'Name' }),
+    messengerId: field({ type: String, optional: true, label: 'Messenger integration' }),
+    messengerBrandCode: field({ type: String, optional: true, label: 'Messenger brand code' }),
+    kbTopicId: field({ type: String, optional: true, label: 'Knowledgebase topic' }),
+    leadIds: field({ type: [String], optional: true, label: 'Leads' }),
+    leadMaps: field({ type: [Object], optional: true }),
+  }),
+);

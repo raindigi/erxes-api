@@ -1,18 +1,14 @@
 import { Document, Schema } from 'mongoose';
-import { field } from '../utils';
 import { commonItemFieldsSchema, IItemCommonFields } from './boards';
+import { schemaWrapper } from './utils';
 
-export interface ITask extends IItemCommonFields {
-  priority?: string;
-}
-
-export interface ITaskDocument extends ITask, Document {
+export interface ITaskDocument extends IItemCommonFields, Document {
   _id: string;
 }
 
 // Mongoose schemas =======================
-export const taskSchema = new Schema({
-  ...commonItemFieldsSchema,
-
-  priority: field({ type: String, optional: true }),
-});
+export const taskSchema = schemaWrapper(
+  new Schema({
+    ...commonItemFieldsSchema,
+  }),
+);

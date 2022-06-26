@@ -1,26 +1,24 @@
 import { segmentFactory } from '../db/factories';
 import { Segments, Users } from '../db/models';
 
+import { ISegment } from '../db/models/definitions/segments';
 import './setup.ts';
 
 /*
  * Generate test data
  */
-const generateData = () => ({
+const generateData = (): ISegment => ({
   contentType: 'customer',
   name: 'New users',
   description: 'New users',
   subOf: 'DFSAFDSAFDFFFD',
   color: '#fdfdfd',
-  connector: 'any',
   conditions: [
     {
-      field: 'messengerData.sessionCount',
-      operator: 'e',
-      value: '10',
-      dateUnit: 'days',
-      type: 'string',
-      brandId: '1231',
+      type: 'property',
+      propertyName: 'messengerData.sessionCount',
+      propertyOperator: 'e',
+      propertyValue: '10',
     },
   ],
 });
@@ -34,7 +32,6 @@ const checkValues = (segmentObj, doc) => {
   expect(segmentObj.description).toBe(doc.description);
   expect(segmentObj.subOf).toBe(doc.subOf);
   expect(segmentObj.color).toBe(doc.color);
-  expect(segmentObj.connector).toBe(doc.connector);
 
   expect(segmentObj.conditions.field).toEqual(doc.conditions.field);
   expect(segmentObj.conditions.operator).toEqual(doc.conditions.operator);
@@ -56,6 +53,18 @@ describe('Segments mutations', () => {
     // Clearing test data
     await Segments.deleteMany({});
     await Users.deleteMany({});
+  });
+
+  test('Get segment', async () => {
+    try {
+      await Segments.getSegment('fakeId');
+    } catch (e) {
+      expect(e.message).toBe('Segment not found');
+    }
+
+    const response = await Segments.getSegment(_segment._id);
+
+    expect(response).toBeDefined();
   });
 
   test('Create segment', async () => {

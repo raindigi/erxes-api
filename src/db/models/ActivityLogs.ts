@@ -1,361 +1,258 @@
 import { Model, model } from 'mongoose';
-import { Customers } from '.';
-import { graphqlPubsub } from '../../pubsub';
-import {
-  activityLogSchema,
-  IActionPerformer,
-  IActivity,
-  IActivityLogDocument,
-  IContentType,
-} from './definitions/activityLogs';
-import { ICompanyDocument } from './definitions/companies';
-import {
-  ACTIVITY_ACTIONS,
-  ACTIVITY_CONTENT_TYPES,
-  ACTIVITY_PERFORMER_TYPES,
-  ACTIVITY_TYPES,
-} from './definitions/constants';
-import { IConversationDocument } from './definitions/conversations';
-import { ICustomerDocument } from './definitions/customers';
-import { IDealDocument } from './definitions/deals';
-import { IEmailDeliveriesDocument } from './definitions/emailDeliveries';
-import { IInternalNoteDocument } from './definitions/internalNotes';
-import { ISegmentDocument } from './definitions/segments';
-import { ITaskDocument } from './definitions/tasks';
-import { ITicketDocument } from './definitions/tickets';
+import { activityLogSchema, IActivityLogDocument, IActivityLogInput } from './definitions/activityLogs';
 
-interface ICreateDocInput {
-  performer?: IActionPerformer;
-  performedBy?: IActionPerformer;
-  activity: IActivity;
-  contentType: IContentType;
-  // TODO: remove
-  coc?: IContentType;
-}
+import { IItemCommonFieldsDocument } from './definitions/boards';
+import { ACTIVITY_ACTIONS } from './definitions/constants';
+import { ISegmentDocument } from './definitions/segments';
 
 export interface IActivityLogModel extends Model<IActivityLogDocument> {
-  createDoc(doc: ICreateDocInput): Promise<IActivityLogDocument>;
+  addActivityLog(doc: IActivityLogInput): Promise<IActivityLogDocument>;
+  removeActivityLog(contentId: string): void;
+
+  createSegmentLog(segment: ISegmentDocument, customer: string[], type: string, maxBulk?: number);
   createLogFromWidget(type: string, payload): Promise<IActivityLogDocument>;
-  createConversationLog(conversation: IConversationDocument): Promise<IActivityLogDocument>;
-  createCustomerLog(customer: ICustomerDocument): Promise<IActivityLogDocument>;
-  createCompanyLog(company: ICompanyDocument): Promise<IActivityLogDocument>;
-  createEmailDeliveryLog(email: IEmailDeliveriesDocument): Promise<IActivityLogDocument>;
-  createInternalNoteLog(internalNote: IInternalNoteDocument): Promise<IActivityLogDocument>;
-  createDealLog(deal: IDealDocument): Promise<IActivityLogDocument>;
-  createSegmentLog(segment: ISegmentDocument, customer?: ICustomerDocument): Promise<IActivityLogDocument>;
-  createTicketLog(ticket: ITicketDocument): Promise<IActivityLogDocument>;
-  createTaskLog(task: ITaskDocument): Promise<IActivityLogDocument>;
+  createCocLog({ coc, contentType }: { coc: any; contentType: string }): Promise<IActivityLogDocument>;
+  createBoardItemLog({
+    item,
+    contentType,
+  }: {
+    item: IItemCommonFieldsDocument;
+    contentType: string;
+  }): Promise<IActivityLogDocument>;
+  createBoardItemMovementLog(
+    item: IItemCommonFieldsDocument,
+    type: string,
+    userId: string,
+    content: object,
+  ): Promise<IActivityLogDocument>;
+  createAssigneLog({
+    contentId,
+    userId,
+    contentType,
+    content,
+  }: {
+    contentId: string;
+    userId: string;
+    contentType: string;
+    content: object;
+  }): Promise<IActivityLogDocument>;
+  createChecklistLog({
+    item,
+    contentType,
+    action,
+  }: {
+    item: any;
+    contentType: string;
+    action: string;
+  }): Promise<IActivityLogDocument>;
+
+  createArchiveLog({
+    item,
+    contentType,
+    action,
+    userId,
+  }: {
+    item: any;
+    contentType: string;
+    action: string;
+    userId: string;
+  }): Promise<IActivityLogDocument>;
 }
 
 export const loadClass = () => {
-  const cocFindOne = (conversationId: string, cocId: string, cocType: string) => {
-    return ActivityLogs.findOne({
-      'activity.type': ACTIVITY_TYPES.CONVERSATION,
-      'activity.action': ACTIVITY_ACTIONS.CREATE,
-      'activity.id': conversationId,
-      'contentType.type': cocType,
-      'performedBy.type': ACTIVITY_PERFORMER_TYPES.CUSTOMER,
-      'contentType.id': cocId,
-    });
-  };
-
-  const cocCreate = (conversationId: string, content: string, cocId: string, cocType: string) => {
-    return ActivityLogs.createDoc({
-      activity: {
-        type: ACTIVITY_TYPES.CONVERSATION,
-        action: ACTIVITY_ACTIONS.CREATE,
-        content,
-        id: conversationId,
-      },
-      performer: {
-        type: ACTIVITY_PERFORMER_TYPES.CUSTOMER,
-        id: cocId,
-      },
-      contentType: {
-        type: cocType,
-        id: cocId,
-      },
-    });
-  };
-
   class ActivityLog {
-    /**
-     * Create an ActivityLog document
-     */
-    public static async createDoc(doc: ICreateDocInput) {
-      const { performer } = doc;
-
-      let performedBy = {
-        type: ACTIVITY_PERFORMER_TYPES.SYSTEM,
-      };
-
-      if (performer) {
-        performedBy = performer;
-      }
-
-      const log = await ActivityLogs.create({ performedBy, ...doc });
-
-      graphqlPubsub.publish('activityLogsChanged', { activityLogsChanged: true });
-
-      return log;
+    public static addActivityLog(doc: IActivityLogInput) {
+      return ActivityLogs.create(doc);
     }
 
-    public static createLogFromWidget(type: string, payload) {
+    public static async removeActivityLog(contentId: IActivityLogInput) {
+      await ActivityLogs.deleteMany({ contentId });
+    }
+
+    public static async createAssigneLog({
+      contentId,
+      userId,
+      contentType,
+      content,
+    }: {
+      contentId: string;
+      userId: string;
+      contentType: string;
+      content: object;
+    }) {
+      return ActivityLogs.addActivityLog({
+        contentType,
+        contentId,
+        action: 'assignee',
+        content,
+        createdBy: userId || '',
+      });
+    }
+
+    public static createBoardItemLog({ item, contentType }: { item: IItemCommonFieldsDocument; contentType: string }) {
+      let action = ACTIVITY_ACTIONS.CREATE;
+      let content = '';
+
+      if (item.sourceConversationId) {
+        action = ACTIVITY_ACTIONS.CONVERT;
+        content = item.sourceConversationId;
+      }
+
+      return ActivityLogs.addActivityLog({
+        contentType,
+        contentId: item._id,
+        action,
+        createdBy: item.userId || '',
+        content,
+      });
+    }
+
+    public static createBoardItemMovementLog(
+      item: IItemCommonFieldsDocument,
+      contentType: string,
+      userId: string,
+      content: object,
+    ) {
+      return ActivityLogs.addActivityLog({
+        contentType,
+        contentId: item._id,
+        action: ACTIVITY_ACTIONS.MOVED,
+        createdBy: userId,
+        content,
+      });
+    }
+
+    public static async createLogFromWidget(type: string, payload) {
       switch (type) {
         case 'create-customer':
-          ActivityLogs.createCustomerLog(payload);
-          break;
+          return ActivityLogs.createCocLog({ coc: payload, contentType: 'customer' });
         case 'create-company':
-          ActivityLogs.createCompanyLog(payload);
-          break;
-        case 'create-conversation':
-          ActivityLogs.createConversationLog(payload);
-          break;
+          return ActivityLogs.createCocLog({ coc: payload, contentType: 'company' });
       }
     }
 
-    /**
-     * Create a conversation log for a given customer,
-     * if the customer is related to companies,
-     * then create conversation log with all related companies
-     */
-    public static async createConversationLog(conversation: IConversationDocument) {
-      const customer = await Customers.findOne({ _id: conversation.customerId });
+    public static createCocLog({ coc, contentType }: { coc: any; contentType: string }) {
+      let action = ACTIVITY_ACTIONS.CREATE;
+      let content = '';
 
-      if (!customer || !customer._id) {
-        return;
+      if (coc.mergedIds && coc.mergedIds.length > 0) {
+        action = ACTIVITY_ACTIONS.MERGE;
+        content = coc.mergedIds;
       }
 
-      if (customer.companyIds && customer.companyIds.length > 0) {
-        for (const companyId of customer.companyIds) {
-          // check against duplication
-          const log = await cocFindOne(conversation._id, companyId, ACTIVITY_CONTENT_TYPES.COMPANY);
+      return ActivityLogs.addActivityLog({
+        contentType,
+        content,
+        contentId: coc._id,
+        action,
+        createdBy: coc.ownerId || coc.integrationId,
+      });
+    }
 
-          if (!log) {
-            await cocCreate(conversation._id, conversation.content || '', companyId, ACTIVITY_CONTENT_TYPES.COMPANY);
-          }
+    /**
+     * Create a customer or company segment logs
+     */
+    public static async createSegmentLog(
+      segment: ISegmentDocument,
+      contentIds: string[],
+      type: string,
+      maxBulk: number = 10000,
+    ) {
+      const foundSegments = await ActivityLogs.find(
+        {
+          contentType: type,
+          action: 'segment',
+          contentId: { $in: contentIds },
+          'content.id': segment._id,
+        },
+        { contentId: 1 },
+      );
+
+      const foundContentIds = foundSegments.map(s => s.contentId);
+
+      const diffContentIds = contentIds.filter(x => !foundContentIds.includes(x));
+
+      let bulkOpt: Array<{
+        contentType: string;
+        contentId: string;
+        action: string;
+        content: {};
+      }> = [];
+
+      let bulkCounter = 0;
+
+      for (const contentId of diffContentIds) {
+        bulkCounter = bulkCounter + 1;
+
+        bulkOpt.push({
+          contentType: type,
+          contentId,
+          action: 'segment',
+          content: {
+            id: segment._id,
+            content: segment.name,
+          },
+        });
+
+        if (bulkCounter === maxBulk) {
+          await ActivityLogs.insertMany(bulkOpt);
+          bulkOpt = [];
+          bulkCounter = 0;
         }
       }
 
-      // check against duplication ======
-      const foundLog = await cocFindOne(conversation._id, customer._id, ACTIVITY_CONTENT_TYPES.CUSTOMER);
-
-      if (!foundLog) {
-        return cocCreate(conversation._id, conversation.content || '', customer._id, ACTIVITY_CONTENT_TYPES.CUSTOMER);
+      if (bulkOpt.length === 0) {
+        return;
       }
+
+      return ActivityLogs.insertMany(bulkOpt);
     }
 
-    public static createCustomerLog(customer: ICustomerDocument) {
-      let performer;
-
-      if (customer.ownerId) {
-        performer = {
-          type: ACTIVITY_PERFORMER_TYPES.USER,
-          id: customer.ownerId,
-        };
-      }
-
-      let action = ACTIVITY_ACTIONS.CREATE;
-      let content = `${customer.firstName || ''} ${customer.lastName || ''}`;
-
-      if (customer.mergedIds && customer.mergedIds.length > 0) {
-        action = ACTIVITY_ACTIONS.MERGE;
-        content = customer.mergedIds.toString();
-      }
-
-      return ActivityLogs.createDoc({
-        activity: {
-          type: ACTIVITY_TYPES.CUSTOMER,
-          action,
-          content,
-          id: customer._id,
-        },
-        contentType: {
-          type: ACTIVITY_CONTENT_TYPES.CUSTOMER,
-          id: customer._id,
-        },
-        performer,
+    public static async createArchiveLog({
+      item,
+      contentType,
+      action,
+      userId,
+    }: {
+      item: any;
+      contentType: string;
+      action: string;
+      userId: string;
+    }) {
+      return ActivityLogs.addActivityLog({
+        contentType,
+        contentId: item._id,
+        action: 'archive',
+        content: action,
+        createdBy: userId,
       });
     }
 
-    public static createCompanyLog(company: ICompanyDocument) {
-      let performer;
-
-      if (company.ownerId) {
-        performer = {
-          type: ACTIVITY_PERFORMER_TYPES.USER,
-          id: company.ownerId,
-        };
+    public static async createChecklistLog({
+      item,
+      contentType,
+      action,
+    }: {
+      item: any;
+      contentType: string;
+      action: string;
+    }) {
+      if (action === 'delete') {
+        await ActivityLogs.updateMany(
+          { 'content._id': item._id },
+          { $set: { 'content.name': item.title || item.content } },
+        );
       }
 
-      let action = ACTIVITY_ACTIONS.CREATE;
-      let content = company.primaryName || '';
-
-      if (company.mergedIds && company.mergedIds.length > 0) {
-        action = ACTIVITY_ACTIONS.MERGE;
-        content = company.mergedIds.toString();
-      }
-
-      return ActivityLogs.createDoc({
-        activity: {
-          type: ACTIVITY_TYPES.COMPANY,
-          action,
-          content,
-          id: company._id,
+      return ActivityLogs.addActivityLog({
+        contentType,
+        contentId: item.contentTypeId || item.checklistId,
+        action,
+        content: {
+          _id: item._id,
+          name: item.title || item.content,
         },
-        contentType: {
-          type: ACTIVITY_CONTENT_TYPES.COMPANY,
-          id: company._id,
-        },
-        performer,
-      });
-    }
-
-    public static createEmailDeliveryLog(email: IEmailDeliveriesDocument) {
-      return ActivityLogs.createDoc({
-        activity: {
-          id: Math.random().toString(),
-          type: ACTIVITY_TYPES.EMAIL,
-          action: ACTIVITY_ACTIONS.SEND,
-          content: email.body,
-        },
-        contentType: {
-          type: email.cocType,
-          id: email.cocId || '',
-        },
-        performer: {
-          type: ACTIVITY_PERFORMER_TYPES.USER,
-          id: email.userId,
-        },
-      });
-    }
-
-    public static createInternalNoteLog(internalNote: IInternalNoteDocument) {
-      return ActivityLogs.createDoc({
-        activity: {
-          type: ACTIVITY_TYPES.INTERNAL_NOTE,
-          action: ACTIVITY_ACTIONS.CREATE,
-          content: internalNote.content,
-          id: internalNote._id,
-        },
-        contentType: {
-          type: internalNote.contentType,
-          id: internalNote.contentTypeId,
-        },
-        performer: {
-          type: ACTIVITY_PERFORMER_TYPES.USER,
-          id: internalNote.createdUserId,
-        },
-      });
-    }
-
-    public static createDealLog(deal: IDealDocument) {
-      let performer;
-
-      if (deal.userId) {
-        performer = {
-          type: ACTIVITY_PERFORMER_TYPES.USER,
-          id: deal.userId,
-        };
-      }
-
-      return ActivityLogs.createDoc({
-        activity: {
-          type: ACTIVITY_TYPES.DEAL,
-          action: ACTIVITY_ACTIONS.CREATE,
-          content: deal.name || '',
-          id: deal._id,
-        },
-        contentType: {
-          type: ACTIVITY_CONTENT_TYPES.DEAL,
-          id: deal._id,
-        },
-        performer,
-      });
-    }
-
-    public static createTicketLog(ticket: ITicketDocument) {
-      let performer;
-
-      if (ticket.userId) {
-        performer = {
-          type: ACTIVITY_PERFORMER_TYPES.USER,
-          id: ticket.userId,
-        };
-      }
-
-      return ActivityLogs.createDoc({
-        activity: {
-          type: ACTIVITY_TYPES.TICKET,
-          action: ACTIVITY_ACTIONS.CREATE,
-          content: ticket.name || '',
-          id: ticket._id,
-        },
-        contentType: {
-          type: ACTIVITY_CONTENT_TYPES.TICKET,
-          id: ticket._id,
-        },
-        performer,
-      });
-    }
-
-    public static createTaskLog(task: ITaskDocument) {
-      let performer;
-
-      if (task.userId) {
-        performer = {
-          type: ACTIVITY_PERFORMER_TYPES.USER,
-          id: task.userId,
-        };
-      }
-
-      return ActivityLogs.createDoc({
-        activity: {
-          type: ACTIVITY_TYPES.TASK,
-          action: ACTIVITY_ACTIONS.CREATE,
-          content: task.name || '',
-          id: task._id,
-        },
-        contentType: {
-          type: ACTIVITY_CONTENT_TYPES.TASK,
-          id: task._id,
-        },
-        performer,
-      });
-    }
-
-    /**
-     * Create a customer or company segment log
-     */
-    public static async createSegmentLog(segment: ISegmentDocument, customer?: ICustomerDocument) {
-      if (!customer) {
-        throw new Error('customer must be supplied');
-      }
-
-      const foundSegment = await ActivityLogs.findOne({
-        'activity.type': ACTIVITY_TYPES.SEGMENT,
-        'activity.action': ACTIVITY_ACTIONS.CREATE,
-        'activity.id': segment._id,
-        'contentType.type': segment.contentType,
-        'contentType.id': customer._id,
-      });
-
-      if (foundSegment) {
-        // since this type of activity log already exists, new one won't be created
-        return foundSegment;
-      }
-
-      return this.createDoc({
-        activity: {
-          type: ACTIVITY_TYPES.SEGMENT,
-          action: ACTIVITY_ACTIONS.CREATE,
-          content: segment.name,
-          id: segment._id,
-        },
-        contentType: {
-          type: segment.contentType,
-          id: customer._id,
-        },
+        createdBy: item.createdUserId || '',
       });
     }
   }

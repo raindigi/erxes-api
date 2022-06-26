@@ -1,28 +1,7 @@
-import { Customers, Integrations, Segments } from '../../../db/models';
-import { STATUSES } from '../../../db/models/definitions/constants';
-import QueryBuilder from '../segments/queryBuilder';
-
-export interface IListArgs {
-  page?: number;
-  perPage?: number;
-  segment?: string;
-  tag?: string;
-  ids?: string[];
-  searchValue?: string;
-  lifecycleState?: string;
-  leadStatus?: string;
-  sortField?: string;
-  sortDirection?: number;
-  brand?: string;
-}
-
-interface IIn {
-  $in: string[];
-}
-
-interface IBrandFilter {
-  _id: IIn;
-}
+import * as _ from 'underscore';
+import { Companies, Conformities, Customers, Integrations } from '../../../db/models';
+import { IConformityQueryParams } from '../../resolvers/queries/types';
+import { CommonBuilder } from './utils';
 
 type TSortBuilder = { primaryName: number } | { [index: string]: number };
 
@@ -39,76 +18,69 @@ export const sortBuilder = (params: IListArgs): TSortBuilder => {
   return sortParams;
 };
 
-/*
- * Brand filter
- */
-export const brandFilter = async (brandId: string): Promise<IBrandFilter> => {
-  const integrations = await Integrations.find({ brandId }, { _id: 1 });
-  const integrationIds = integrations.map(i => i._id);
+export interface IListArgs extends IConformityQueryParams {
+  segment?: string;
+  tag?: string;
+  ids?: string[];
+  searchValue?: string;
+  brand?: string;
+  sortField?: string;
+  sortDirection?: number;
+}
 
-  const customers = await Customers.find({ integrationId: { $in: integrationIds } }, { companyIds: 1 });
-
-  let companyIds: any = [];
-
-  for (const customer of customers) {
-    companyIds = [...companyIds, ...(customer.companyIds || [])];
+export class Builder extends CommonBuilder<IListArgs> {
+  constructor(params: IListArgs, context) {
+    super('companies', params, context);
   }
 
-  return { _id: { $in: companyIds } };
-};
+  // filter by brand
+  public async brandFilter(brandId: string): Promise<void> {
+    const integrations = await Integrations.findIntegrations({ brandId }, { _id: 1 });
+    const integrationIds = integrations.map(i => i._id);
 
-export const filter = async (params: IListArgs) => {
-  let selector: any = {
-    status: { $ne: STATUSES.DELETED },
-  };
+    const customers = await Customers.find({ integrationId: { $in: integrationIds } }, { companyIds: 1 });
 
-  // Filter by segments
-  if (params.segment) {
-    const segment = await Segments.findOne({ _id: params.segment });
-    const query = await QueryBuilder.segments(segment);
+    const customerIds = await customers.map(customer => customer._id);
+    const companyIds = await Conformities.filterConformity({
+      mainType: 'customer',
+      mainTypeIds: customerIds,
+      relType: 'company',
+    });
 
-    Object.assign(selector, query);
+    this.positiveList.push({
+      terms: {
+        _id: companyIds || [],
+      },
+    });
   }
 
-  if (params.searchValue) {
-    const fields = [
-      { names: { $in: [new RegExp(`.*${params.searchValue}.*`, 'i')] } },
-      { primaryEmail: new RegExp(`.*${params.searchValue}.*`, 'i') },
-      { primaryPhone: new RegExp(`.*${params.searchValue}.*`, 'i') },
-      { emails: { $in: [new RegExp(`.*${params.searchValue}.*`, 'i')] } },
-      { phones: { $in: [new RegExp(`.*${params.searchValue}.*`, 'i')] } },
-      { website: new RegExp(`.*${params.searchValue}.*`, 'i') },
-      { industry: new RegExp(`.*${params.searchValue}.*`, 'i') },
-      { plan: new RegExp(`.*${params.searchValue}.*`, 'i') },
-    ];
+  public async findAllMongo(limit: number) {
+    const selector = {
+      ...this.context.commonQuerySelector,
+      status: { $ne: 'deleted' },
+    };
 
-    selector = { $or: fields };
+    const companies = await Companies.find(selector)
+      .sort({ createdAt: -1 })
+      .limit(limit);
+
+    const count = await Companies.find(selector).countDocuments();
+
+    return {
+      list: companies,
+      totalCount: count,
+    };
   }
 
-  // Filter by tag
-  if (params.tag) {
-    selector.tagIds = params.tag;
-  }
+  /*
+   * prepare all queries. do not do any action
+   */
+  public async buildAllQueries(): Promise<void> {
+    await super.buildAllQueries();
 
-  // filter directly using ids
-  if (params.ids) {
-    selector = { _id: { $in: params.ids } };
+    // filter by brand
+    if (this.params.brand) {
+      await this.brandFilter(this.params.brand);
+    }
   }
-
-  // filter by lead status
-  if (params.leadStatus) {
-    selector.leadStatus = params.leadStatus;
-  }
-
-  // filter by life cycle state
-  if (params.lifecycleState) {
-    selector.lifecycleState = params.lifecycleState;
-  }
-
-  // filter by brandId
-  if (params.brand) {
-    selector = { ...selector, ...(await brandFilter(params.brand)) };
-  }
-
-  return selector;
-};
+}

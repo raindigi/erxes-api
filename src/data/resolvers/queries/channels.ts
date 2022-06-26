@@ -1,6 +1,5 @@
 import { Channels } from '../../../db/models';
 import { checkPermission, requireLogin } from '../../permissions/wrappers';
-import { paginate } from '../../utils';
 
 interface IIn {
   $in: string[];
@@ -14,7 +13,7 @@ const channelQueries = {
   /**
    * Channels list
    */
-  channels(_root, { memberIds, ...queryParams }: { page: number; perPage: number; memberIds: string[] }) {
+  channels(_root, { memberIds }: { memberIds: string[] }) {
     const query: IChannelQuery = {};
     const sort = { createdAt: -1 };
 
@@ -22,9 +21,7 @@ const channelQueries = {
       query.memberIds = { $in: memberIds };
     }
 
-    const channels = paginate(Channels.find(query), queryParams);
-
-    return channels.sort(sort);
+    return Channels.find(query).sort(sort);
   },
 
   /**

@@ -16,7 +16,6 @@ describe('Test permissions model', () => {
 
   const doc = {
     actions: ['up', ' test'],
-    allowed: true,
     module: 'module name',
   };
 
@@ -28,7 +27,7 @@ describe('Test permissions model', () => {
         { name: 'action', description: 'd', use: [] },
         { name: 'action1', description: 'd', use: [] },
         { name: 'action2', description: 'd', use: [] },
-        { name: 'action3', description: 'd', use: [] },
+        { name: 'action3', description: 'd' },
       ],
     },
   });
@@ -46,21 +45,32 @@ describe('Test permissions model', () => {
     await UsersGroups.deleteMany({});
   });
 
-  test('Create permission invalid action', async () => {
+  test('Create permission (Error: Invalid data)', async () => {
     expect.assertions(1);
     try {
-      await Permissions.createPermission({ userIds: [_user._id], ...doc });
+      await Permissions.createPermission({ userIds: [_user._id], ...doc, allowed: true });
     } catch (e) {
       expect(e.message).toEqual('Invalid data');
     }
   });
 
+  test('Create permission without user and group', async () => {
+    const permission = await Permissions.createPermission({
+      ...doc,
+      actions: ['action', 'action1', 'action2', 'action3'],
+      allowed: true,
+    });
+
+    expect(permission.length).toEqual(0);
+  });
+
   test('Create permission', async () => {
     const permission = await Permissions.createPermission({
       ...doc,
+      allowed: true,
       userIds: [_user._id],
       groupIds: [_group._id],
-      actions: ['action', 'action1', 'action2', 'action3'],
+      actions: ['action', 'action', 'action1', 'action2', 'action3'],
     });
 
     expect(permission.length).toEqual(8);
@@ -80,10 +90,40 @@ describe('Test permissions model', () => {
     }
   });
 
+  test('Test getPermission() with fake id', async () => {
+    expect.assertions(1);
+
+    try {
+      await Permissions.getPermission('not-found');
+    } catch (e) {
+      expect(e.message).toBe('Permission not found');
+    }
+  });
+
+  test('Test getPermission() with real id', async () => {
+    const perm = await Permissions.getPermission(_permission._id);
+
+    expect(perm._id).toBe(_permission._id);
+  });
+
   test('Remove permission', async () => {
     const isDeleted = await Permissions.removePermission([_permission.id]);
 
     expect(isDeleted).toBeTruthy();
+  });
+
+  test('Get user group', async () => {
+    try {
+      await UsersGroups.getGroup('fakeId');
+    } catch (e) {
+      expect(e.message).toBe('User group not found');
+    }
+
+    const userGroup = await usersGroupFactory();
+
+    const response = await UsersGroups.getGroup(userGroup._id);
+
+    expect(response).toBeDefined();
   });
 
   test('Create user group', async () => {
@@ -142,5 +182,28 @@ describe('Test permissions model', () => {
     } catch (e) {
       expect(e.message).toBe('Group not found with id groupId');
     }
+  });
+
+  test('Test copyGroup()', async () => {
+    const user1 = await userFactory({});
+    const user2 = await userFactory({});
+    const group = await UsersGroups.createGroup(
+      {
+        name: 'groupName',
+        description: 'groupDescription',
+      },
+      [user1._id, user2._id],
+    );
+
+    await permissionFactory({ groupId: group._id });
+    await permissionFactory({ groupId: group._id });
+
+    const clone = await UsersGroups.copyGroup(group._id, [user1._id, user2._id]);
+    const clonedPermissions = await Permissions.find({ groupId: clone._id });
+    const nameCount = await UsersGroups.countDocuments({ name: new RegExp(`${group.name}`, 'i') });
+
+    expect(clone.name).toBe(`${group.name}-copied-${nameCount - 1}`);
+    expect(clone.description).toBe(`${group.description}-copied`);
+    expect(clonedPermissions.length).toBe(2);
   });
 });

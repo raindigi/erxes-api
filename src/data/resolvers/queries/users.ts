@@ -1,6 +1,6 @@
 import { Conversations, Users } from '../../../db/models';
-import { IUserDocument } from '../../../db/models/definitions/users';
 import { checkPermission, requireLogin } from '../../permissions/wrappers';
+import { IContext } from '../../types';
 import { paginate } from '../../utils';
 
 interface IListArgs {
@@ -8,12 +8,15 @@ interface IListArgs {
   perPage?: number;
   searchValue?: string;
   isActive?: boolean;
+  requireUsername: boolean;
   ids?: string[];
+  email?: string;
   status?: string;
+  brandIds?: string[];
 }
 
 const queryBuilder = async (params: IListArgs) => {
-  const { searchValue, isActive, ids, status } = params;
+  const { searchValue, isActive, requireUsername, ids, status, brandIds } = params;
 
   const selector: any = {
     isActive,
@@ -21,6 +24,7 @@ const queryBuilder = async (params: IListArgs) => {
 
   if (searchValue) {
     const fields = [
+      { email: new RegExp(`.*${params.searchValue}.*`, 'i') },
       { 'details.fullName': new RegExp(`.*${params.searchValue}.*`, 'i') },
       { 'details.position': new RegExp(`.*${params.searchValue}.*`, 'i') },
     ];
@@ -28,16 +32,24 @@ const queryBuilder = async (params: IListArgs) => {
     selector.$or = fields;
   }
 
+  if (requireUsername) {
+    selector.username = { $ne: null };
+  }
+
   if (isActive === undefined || isActive === null) {
     selector.isActive = true;
   }
 
-  if (ids) {
-    selector._id = { $in: ids };
+  if (ids && ids.length > 0) {
+    return { _id: { $in: ids } };
   }
 
   if (status) {
-    selector.registrationToken = { $exists: false, $eq: null };
+    selector.registrationToken = { $eq: null };
+  }
+
+  if (brandIds && brandIds.length > 0) {
+    selector.brandIds = { $in: brandIds };
   }
 
   return selector;
@@ -47,11 +59,24 @@ const userQueries = {
   /**
    * Users list
    */
-  async users(_root, args: IListArgs) {
-    const selector = await queryBuilder(args);
+  async users(_root, args: IListArgs, { userBrandIdsSelector }: IContext) {
+    const selector = { ...userBrandIdsSelector, ...(await queryBuilder(args)) };
     const sort = { username: 1 };
 
     return paginate(Users.find(selector).sort(sort), args);
+  },
+
+  /**
+   * All users
+   */
+  allUsers(_root, { isActive }: { isActive: boolean }, { userBrandIdsSelector }: IContext) {
+    const selector: { isActive?: boolean } = userBrandIdsSelector;
+
+    if (isActive) {
+      selector.isActive = true;
+    }
+
+    return Users.find(selector).sort({ username: 1 });
   },
 
   /**
@@ -64,8 +89,8 @@ const userQueries = {
   /**
    * Get all users count. We will use it in pager
    */
-  async usersTotalCount(_root, args: IListArgs) {
-    const selector = await queryBuilder(args);
+  async usersTotalCount(_root, args: IListArgs, { userBrandIdsSelector }: IContext) {
+    const selector = { ...userBrandIdsSelector, ...(await queryBuilder(args)) };
 
     return Users.find(selector).countDocuments();
   },
@@ -73,12 +98,8 @@ const userQueries = {
   /**
    * Current user
    */
-  currentUser(_root, _args, { user }: { user: IUserDocument }) {
-    if (user) {
-      return Users.findOne({ _id: user._id, isActive: { $ne: false } });
-    }
-
-    return null;
+  currentUser(_root, _args, { user }: IContext) {
+    return user ? Users.findOne({ _id: user._id, isActive: { $ne: false } }) : null;
   },
 
   /**

@@ -1,151 +1,116 @@
-import { Boards, Pipelines, Stages } from '../../db/models';
+import { Boards, ChecklistItems, Checklists, Conformities, PipelineLabels, Pipelines, Stages } from '../../db/models';
+import { getCollection, getNewOrder } from '../../db/models/boardUtils';
 import { NOTIFICATION_TYPES } from '../../db/models/definitions/constants';
+import { IDealDocument } from '../../db/models/definitions/deals';
+import { ITaskDocument } from '../../db/models/definitions/tasks';
+import { ITicketDocument } from '../../db/models/definitions/tickets';
 import { IUserDocument } from '../../db/models/definitions/users';
 import { can } from '../permissions/utils';
 import { checkLogin } from '../permissions/wrappers';
 import utils from '../utils';
 
 export const notifiedUserIds = async (item: any) => {
-  const userIds: string[] = [];
+  let userIds: string[] = [];
 
-  if (item.assignedUserIds) {
-    userIds.concat(item.assignedUserIds);
-  }
+  userIds = userIds.concat(item.assignedUserIds || []);
 
-  if (item.watchedUserIds) {
-    userIds.concat(item.watchedUserIds);
-  }
+  userIds = userIds.concat(item.watchedUserIds || []);
 
-  const stage = await Stages.getStage(item.stageId || '');
-  const pipeline = await Pipelines.getPipeline(stage.pipelineId || '');
+  const stage = await Stages.getStage(item.stageId);
+  const pipeline = await Pipelines.getPipeline(stage.pipelineId);
 
-  if (pipeline.watchedUserIds) {
-    userIds.concat(pipeline.watchedUserIds);
-  }
+  userIds = userIds.concat(pipeline.watchedUserIds || []);
 
   return userIds;
 };
 
+export interface IBoardNotificationParams {
+  item: IDealDocument;
+  user: IUserDocument;
+  type: string;
+  action?: string;
+  content?: string;
+  contentType: string;
+  invitedUsers?: string[];
+  removedUsers?: string[];
+}
+
 /**
  * Send notification to all members of this content except the sender
  */
-export const sendNotifications = async (
-  stageId: string,
-  user: IUserDocument,
-  type: string,
-  userIds: string[],
-  content: string,
-  contentType: string,
-) => {
-  const stage = await Stages.findOne({ _id: stageId });
+export const sendNotifications = async ({
+  item,
+  user,
+  type,
+  action,
+  content,
+  contentType,
+  invitedUsers,
+  removedUsers,
+}: IBoardNotificationParams) => {
+  const stage = await Stages.getStage(item.stageId);
 
-  if (!stage) {
-    throw new Error('Stage not found');
+  const pipeline = await Pipelines.getPipeline(stage.pipelineId);
+
+  const title = `${contentType} updated`;
+
+  if (!content) {
+    content = `${contentType} '${item.name}'`;
   }
 
-  const pipeline = await Pipelines.findOne({ _id: stage.pipelineId });
+  let route = '';
 
-  if (!pipeline) {
-    throw new Error('Pipeline not found');
+  if (contentType === 'ticket') {
+    route = '/inbox';
+  }
+
+  const usersToExclude = [...(removedUsers || []), ...(invitedUsers || []), user._id];
+
+  const notificationDoc = {
+    createdUser: user,
+    title,
+    contentType,
+    contentTypeId: item._id,
+    notifType: type,
+    action: action ? action : `has updated ${contentType}`,
+    content,
+    link: `${route}/${contentType}/board?id=${pipeline.boardId}&pipelineId=${pipeline._id}&itemId=${item._id}`,
+
+    // exclude current user, invited user and removed users
+    receivers: (await notifiedUserIds(item)).filter(id => {
+      return usersToExclude.indexOf(id) < 0;
+    }),
+  };
+
+  if (removedUsers && removedUsers.length > 0) {
+    await utils.sendNotification({
+      ...notificationDoc,
+      notifType: NOTIFICATION_TYPES[`${contentType.toUpperCase()}_REMOVE_ASSIGN`],
+      action: `removed you from ${contentType}`,
+      content: `'${item.name}'`,
+      receivers: removedUsers.filter(id => id !== user._id),
+    });
+  }
+
+  if (invitedUsers && invitedUsers.length > 0) {
+    await utils.sendNotification({
+      ...notificationDoc,
+      notifType: NOTIFICATION_TYPES[`${contentType.toUpperCase()}_ADD`],
+      action: `invited you to the ${contentType}: `,
+      content: `'${item.name}'`,
+      receivers: invitedUsers.filter(id => id !== user._id),
+    });
   }
 
   await utils.sendNotification({
-    createdUser: user._id,
-    notifType: type,
-    title: content,
-    content,
-    link: `/${contentType}/board?id=${pipeline.boardId}&pipelineId=${pipeline._id}`,
-
-    // exclude current user
-    receivers: userIds.filter(id => id !== user._id),
+    ...notificationDoc,
   });
 };
 
-export const manageNotifications = async (collection: any, item: any, user: IUserDocument, type: string) => {
-  const { _id } = item;
-  const oldItem = await collection.findOne({ _id });
-
-  const oldUserIds = await notifiedUserIds(oldItem);
-  const userIds = await notifiedUserIds(item);
-
-  // new assignee users
-  const newUserIds = userIds.filter(userId => oldUserIds.indexOf(userId) < 0);
-
-  if (newUserIds.length > 0) {
-    await sendNotifications(
-      item.stageId || '',
-      user,
-      NOTIFICATION_TYPES[`${type.toUpperCase()}_ADD`],
-      newUserIds,
-      `'{userName}' invited you to the ${type}: '${item.name}'.`,
-      type,
-    );
-  }
-
-  // remove from assignee users
-  const removedUserIds = oldUserIds.filter(userId => userIds.indexOf(userId) < 0);
-
-  if (removedUserIds.length > 0) {
-    await sendNotifications(
-      item.stageId || '',
-      user,
-      NOTIFICATION_TYPES[`${type.toUpperCase()}_REMOVE_ASSIGN`],
-      removedUserIds,
-      `'{userName}' removed you from ${type}: '${item.name}'.`,
-      type,
-    );
-  }
-
-  // dont assignee change and other edit
-  if (removedUserIds.length === 0 && newUserIds.length === 0) {
-    await sendNotifications(
-      item.stageId || '',
-      user,
-      NOTIFICATION_TYPES[`${type.toUpperCase()}_EDIT`],
-      userIds,
-      `'{userName}' edited your ${type} '${item.name}'`,
-      type,
-    );
-  }
-};
-
-export const itemsChange = async (collection: any, item: any, type: string, destinationStageId: string) => {
-  const oldItem = await collection.findOne({ _id: item._id });
-  const oldStageId = oldItem ? oldItem.stageId || '' : '';
-
-  let content = `'{userName}' changed order your ${type}:'${item.name}'`;
-
-  if (oldStageId !== destinationStageId) {
-    const stage = await Stages.findOne({ _id: destinationStageId });
-
-    if (!stage) {
-      throw new Error('Stage not found');
-    }
-
-    content = `'{userName}' moved your ${type} '${item.name}' to the '${stage.name}'.`;
-  }
-
-  return content;
-};
-
 export const boardId = async (item: any) => {
-  const stage = await Stages.findOne({ _id: item.stageId });
-
-  if (!stage) {
-    return null;
-  }
-
-  const pipeline = await Pipelines.findOne({ _id: stage.pipelineId });
-
-  if (!pipeline) {
-    return null;
-  }
-
-  const board = await Boards.findOne({ _id: pipeline.boardId });
-
-  if (!board) {
-    return null;
-  }
+  const stage = await Stages.getStage(item.stageId);
+  const pipeline = await Pipelines.getPipeline(stage.pipelineId);
+  const board = await Boards.getBoard(pipeline.boardId);
 
   return board._id;
 };
@@ -159,6 +124,7 @@ const PERMISSION_MAP = {
     pipelinesEdit: 'dealPipelinesEdit',
     pipelinesRemove: 'dealPipelinesRemove',
     pipelinesWatch: 'dealPipelinesWatch',
+    stagesEdit: 'dealStagesEdit',
   },
   ticket: {
     boardsAdd: 'ticketBoardsAdd',
@@ -168,6 +134,7 @@ const PERMISSION_MAP = {
     pipelinesEdit: 'ticketPipelinesEdit',
     pipelinesRemove: 'ticketPipelinesRemove',
     pipelinesWatch: 'ticketPipelinesWatch',
+    stagesEdit: 'ticketStagesEdit',
   },
   task: {
     boardsAdd: 'taskBoardsAdd',
@@ -177,6 +144,22 @@ const PERMISSION_MAP = {
     pipelinesEdit: 'taskPipelinesEdit',
     pipelinesRemove: 'taskPipelinesRemove',
     pipelinesWatch: 'taskPipelinesWatch',
+    stagesEdit: 'taskStagesEdit',
+  },
+  growthHack: {
+    boardsAdd: 'growthHackBoardsAdd',
+    boardsEdit: 'growthHackBoardsEdit',
+    boardsRemove: 'growthHackBoardsRemove',
+    pipelinesAdd: 'growthHackPipelinesAdd',
+    pipelinesEdit: 'growthHackPipelinesEdit',
+    pipelinesRemove: 'growthHackPipelinesRemove',
+    pipelinesWatch: 'growthHackPipelinesWatch',
+    stagesEdit: 'growthHackStagesEdit',
+    templatesAdd: 'growthHackTemplatesAdd',
+    templatesEdit: 'growthHackTemplatesEdit',
+    templatesRemove: 'growthHackTemplatesRemove',
+    templatesDuplicate: 'growthHackTemplatesDuplicate',
+    showTemplates: 'showGrowthHackTemplates',
   },
 };
 
@@ -196,4 +179,156 @@ export const checkPermission = async (type: string, user: IUserDocument, mutatio
   }
 
   return;
+};
+
+export const createConformity = async ({
+  companyIds,
+  customerIds,
+  mainType,
+  mainTypeId,
+}: {
+  companyIds?: string[];
+  customerIds?: string[];
+  mainType: string;
+  mainTypeId: string;
+}) => {
+  for (const companyId of companyIds || []) {
+    await Conformities.addConformity({
+      mainType,
+      mainTypeId,
+      relType: 'company',
+      relTypeId: companyId,
+    });
+  }
+
+  for (const customerId of customerIds || []) {
+    await Conformities.addConformity({
+      mainType,
+      mainTypeId,
+      relType: 'customer',
+      relTypeId: customerId,
+    });
+  }
+};
+
+interface ILabelParams {
+  item: IDealDocument | ITaskDocument | ITicketDocument;
+  doc: any;
+  user: IUserDocument;
+}
+
+/**
+ * Copies pipeline labels alongside deal/task/tickets when they are moved between different pipelines.
+ */
+export const copyPipelineLabels = async (params: ILabelParams) => {
+  const { item, doc, user } = params;
+
+  const oldStage = await Stages.findOne({ _id: item.stageId });
+  const newStage = await Stages.findOne({ _id: doc.stageId });
+
+  if (!(oldStage && newStage)) {
+    throw new Error('Stage not found');
+  }
+
+  if (oldStage.pipelineId === newStage.pipelineId) {
+    return;
+  }
+
+  const oldLabels = await PipelineLabels.find({ _id: { $in: item.labelIds } });
+  const updatedLabelIds: string[] = [];
+
+  for (const label of oldLabels) {
+    const filter = {
+      name: label.name,
+      colorCode: label.colorCode,
+      pipelineId: newStage.pipelineId,
+    };
+
+    const exists = await PipelineLabels.findOne(filter);
+
+    if (!exists) {
+      const newLabel = await PipelineLabels.createPipelineLabel({
+        ...filter,
+        createdAt: new Date(),
+        createdBy: user._id,
+      });
+
+      updatedLabelIds.push(newLabel._id);
+    } else {
+      updatedLabelIds.push(exists._id);
+    }
+  } // end label loop
+
+  await PipelineLabels.labelsLabel(newStage.pipelineId, item._id, updatedLabelIds);
+};
+
+interface IChecklistParams {
+  contentType: string;
+  contentTypeId: string;
+  targetContentId: string;
+  user: IUserDocument;
+}
+
+/**
+ * Copies checklists of board item
+ */
+export const copyChecklists = async (params: IChecklistParams) => {
+  const { contentType, contentTypeId, targetContentId, user } = params;
+
+  const checklists = await Checklists.find({ contentType, contentTypeId });
+
+  for (const list of checklists) {
+    const checklist = await Checklists.createChecklist(
+      {
+        contentType,
+        contentTypeId: targetContentId,
+        title: `${list.title}-copied`,
+      },
+      user,
+    );
+
+    const items = await ChecklistItems.find({ checklistId: list._id });
+
+    for (const item of items) {
+      await ChecklistItems.createChecklistItem(
+        {
+          isChecked: false,
+          checklistId: checklist._id,
+          content: item.content,
+        },
+        user,
+      );
+    }
+  } // end checklist loop
+};
+
+export const prepareBoardItemDoc = async (_id: string, type: string, userId: string) => {
+  const collection = await getCollection(type);
+  const item = await collection.findOne({ _id });
+
+  const doc = {
+    ...item,
+    userId,
+    modifiedBy: userId,
+    watchedUserIds: [userId],
+    assignedUserIds: item.assignedUserIds,
+    name: `${item.name}-copied`,
+    initialStageId: item.initialStageId,
+    stageId: item.stageId,
+    description: item.description,
+    priority: item.priority,
+    labelIds: item.labelIds,
+    order: await getNewOrder({ collection, stageId: item.stageId, aboveItemId: item._id }),
+
+    attachments: (item.attachments || []).map(a => ({
+      url: a.url,
+      name: a.name,
+      type: a.type,
+      size: a.size,
+    })),
+  };
+
+  delete doc._id;
+
+  return doc;
 };

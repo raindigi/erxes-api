@@ -16,6 +16,7 @@ export interface IListArgs {
   channelId?: string;
   status?: string;
   unassigned?: string;
+  awaitingResponse?: string;
   brandId?: string;
   tag?: string;
   integrationType?: string;
@@ -52,13 +53,17 @@ export default class Builder {
   public user: IUserArgs;
   public queries: any;
   public unassignedQuery?: IUnassignedFilter;
+  public activeIntegrationIds: string[] = [];
 
   constructor(params: IListArgs, user: IUserArgs) {
     this.params = params;
     this.user = user;
   }
 
-  public defaultFilters(): { [index: string]: {} } {
+  public async defaultFilters(): Promise<any> {
+    const activeIntegrations = await Integrations.findIntegrations({}, { _id: 1 });
+    this.activeIntegrationIds = activeIntegrations.map(integ => integ._id);
+
     let statusFilter = this.statusFilter([CONVERSATION_STATUSES.NEW, CONVERSATION_STATUSES.OPEN]);
 
     if (this.params.status === 'closed') {
@@ -80,7 +85,7 @@ export default class Builder {
     };
   }
 
-  public intersectIntegrationIds(...queries: any[]): { integrationId: IIn } {
+  public async intersectIntegrationIds(...queries: any[]): Promise<{ integrationId: IIn }> {
     // filter only queries with $in field
     const withIn = queries.filter(q => q.integrationId && q.integrationId.$in && q.integrationId.$in.length > 0);
 
@@ -91,7 +96,7 @@ export default class Builder {
     const nestedIntegrationIds = _.pluck($ins, '$in');
 
     // ['id1']
-    const integrationids: any = _.intersection(...nestedIntegrationIds);
+    const integrationids: string[] = _.intersection(...nestedIntegrationIds);
 
     return {
       integrationId: { $in: integrationids },
@@ -102,20 +107,21 @@ export default class Builder {
    * find integrationIds from channel && brand
    */
   public async integrationsFilter(): Promise<IIntersectIntegrationIds> {
-    const channelFilter = {
-      memberIds: this.user._id,
-    };
-
     // find all posssible integrations
-    let availIntegrationIds: any = [];
+    let availIntegrationIds: string[] = [];
 
-    const channels = await Channels.find(channelFilter);
+    const channels = await Channels.find({ memberIds: this.user._id });
 
     channels.forEach(channel => {
-      availIntegrationIds = _.union(availIntegrationIds, channel.integrationIds || '');
+      availIntegrationIds = _.union(
+        availIntegrationIds,
+        (channel.integrationIds || []).filter(id => this.activeIntegrationIds.includes(id)),
+      );
     });
 
-    const nestedIntegrationIds: any = [{ integrationId: { $in: availIntegrationIds } }];
+    const nestedIntegrationIds: Array<{ integrationId: { $in: string[] } }> = [
+      { integrationId: { $in: availIntegrationIds } },
+    ];
 
     // filter by channel
     if (this.params.channelId) {
@@ -134,19 +140,16 @@ export default class Builder {
 
   // filter by channel
   public async channelFilter(channelId: string): Promise<{ integrationId: IIn }> {
-    const channel = await Channels.findOne({ _id: channelId });
-    if (channel && channel.integrationIds) {
-      return {
-        integrationId: { $in: channel.integrationIds },
-      };
-    } else {
-      return { integrationId: { $in: [] } };
-    }
+    const channel = await Channels.getChannel(channelId);
+
+    return {
+      integrationId: { $in: (channel.integrationIds || []).filter(id => this.activeIntegrationIds.includes(id)) },
+    };
   }
 
   // filter by brand
   public async brandFilter(brandId: string): Promise<{ integrationId: IIn }> {
-    const integrations = await Integrations.find({ brandId });
+    const integrations = await Integrations.findIntegrations({ brandId });
     const integrationIds = _.pluck(integrations, '_id');
 
     return {
@@ -164,22 +167,18 @@ export default class Builder {
   }
 
   // filter by participating
-  public participatingFilter(): { participatedUserIds: IIn } {
+  public participatingFilter(): { $or: object[] } {
     return {
-      participatedUserIds: { $in: [this.user._id] },
+      $or: [{ participatedUserIds: { $in: [this.user._id] } }, { assignedUserId: this.user._id }],
     };
   }
 
   // filter by starred
-  public starredFilter(): { _id: IIn | { $in: any[] } } {
-    let ids: any = [];
-
-    if (this.user) {
-      ids = this.user.starredConversationIds || [];
-    }
-
+  public starredFilter(): { _id: IIn | { $in: string[] } } {
     return {
-      _id: { $in: ids },
+      _id: {
+        $in: this.user.starredConversationIds || [],
+      },
     };
   }
 
@@ -189,9 +188,16 @@ export default class Builder {
     };
   }
 
+  // filter by awaiting Response
+  public awaitingResponse(): { isCustomerRespondedLast: boolean } {
+    return {
+      isCustomerRespondedLast: true,
+    };
+  }
+
   // filter by integration type
   public async integrationTypeFilter(integrationType: string): Promise<{ $and: IIntersectIntegrationIds[] }> {
-    const integrations = await Integrations.find({ kind: integrationType });
+    const integrations = await Integrations.findIntegrations({ kind: integrationType });
 
     return {
       $and: [
@@ -205,9 +211,9 @@ export default class Builder {
   }
 
   // filter by tag
-  public tagFilter(tagId: string): { tagIds: string[] } {
+  public tagFilter(tagId: string): { tagIds: IIn } {
     return {
-      tagIds: [tagId],
+      tagIds: { $in: [tagId] },
     };
   }
 
@@ -225,7 +231,7 @@ export default class Builder {
    */
   public async buildAllQueries(): Promise<void> {
     this.queries = {
-      default: this.defaultFilters(),
+      default: await this.defaultFilters(),
       starred: {},
       status: {},
       unassigned: {},
@@ -263,6 +269,11 @@ export default class Builder {
       this.queries.starred = this.starredFilter();
     }
 
+    // awaiting response
+    if (this.params.awaitingResponse) {
+      this.queries.awaitingResponse = this.awaitingResponse();
+    }
+
     // filter by status
     if (this.params.status) {
       this.queries.status = this.statusFilter([this.params.status]);
@@ -294,6 +305,7 @@ export default class Builder {
       ...this.queries.starred,
       ...this.queries.tag,
       ...this.queries.createdAt,
+      ...this.queries.awaitingResponse,
     };
   }
 }

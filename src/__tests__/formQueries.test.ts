@@ -23,6 +23,14 @@ describe('formQueries', () => {
           _id
           title
           code
+
+          createdUser {
+            _id
+          }
+
+          fields {
+            _id
+          }
         }
       }
     `;
@@ -47,6 +55,9 @@ describe('formQueries', () => {
           _id
           title
           code
+          createdUser {
+            _id
+          }
         }
       }
     `;

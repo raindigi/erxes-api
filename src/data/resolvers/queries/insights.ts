@@ -1,7 +1,5 @@
 import { ConversationMessages, Conversations, Integrations, Tags } from '../../../db/models';
-import { TAG_TYPES } from '../../../db/models/definitions/constants';
-import { IUserDocument } from '../../../db/models/definitions/users';
-import { INTEGRATION_KIND_CHOICES } from '../../constants';
+import { KIND_CHOICES, TAG_TYPES } from '../../../db/models/definitions/constants';
 import { getDateFieldAsStr, getDurationField } from '../../modules/insights/aggregationUtils';
 import { IListArgs, IPieChartData } from '../../modules/insights/types';
 import {
@@ -23,13 +21,17 @@ import {
   noConversationSelector,
 } from '../../modules/insights/utils';
 import { moduleCheckPermission, moduleRequireLogin } from '../../permissions/wrappers';
+import { IContext } from '../../types';
+import { registerOnboardHistory } from '../../utils';
 
 const insightQueries = {
   /**
    * Builds insights charting data contains
    * count of conversations in various integrations kinds.
    */
-  async insightsIntegrations(_root, args: IListArgs) {
+  async insightsIntegrations(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const filterSelector = getFilterSelector(args);
 
     const conversationSelector = await getConversationSelector(filterSelector);
@@ -37,8 +39,8 @@ const insightQueries = {
     const integrations: IPieChartData[] = [];
 
     // count conversations by each integration kind
-    for (const kind of INTEGRATION_KIND_CHOICES.ALL) {
-      const integrationIds = await Integrations.find({
+    for (const kind of KIND_CHOICES.ALL) {
+      const integrationIds = await Integrations.findIntegrations({
         ...filterSelector.integration,
         kind,
       }).select('_id');
@@ -61,7 +63,9 @@ const insightQueries = {
    * Builds insights charting data contains
    * count of conversations in various integrations tags.
    */
-  async insightsTags(_root, args: IListArgs) {
+  async insightsTags(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const filterSelector = getFilterSelector(args);
 
     const conversationSelector = {
@@ -73,7 +77,7 @@ const insightQueries = {
 
     const tags = await Tags.find({ type: TAG_TYPES.CONVERSATION }).select('name');
 
-    const integrationIdsByTag = await Integrations.find(filterSelector.integration).select('_id');
+    const integrationIdsByTag = await Integrations.findIntegrations(filterSelector.integration).select('_id');
 
     const rawIntegrationIdsByTag = integrationIdsByTag.map(row => row._id);
 
@@ -116,7 +120,9 @@ const insightQueries = {
   /**
    * Counts conversations by each hours in each days.
    */
-  async insightsPunchCard(_root, args: IListArgs, { user }: { user: IUserDocument }) {
+  async insightsPunchCard(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const messageSelector = await getMessageSelector({ args });
 
     return generatePunchData(ConversationMessages, messageSelector, user);
@@ -125,7 +131,9 @@ const insightQueries = {
   /**
    * Sends combined charting data for trends.
    */
-  async insightsTrend(_root, args: IListArgs) {
+  async insightsTrend(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const messageSelector = await getMessageSelector({ args });
 
     return generateChartDataBySelector({ selector: messageSelector });
@@ -134,7 +142,9 @@ const insightQueries = {
   /**
    * Sends summary datas.
    */
-  async insightsSummaryData(_root, args: IListArgs) {
+  async insightsSummaryData(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const selector = await getMessageSelector({
       args,
       createdAt: getSummaryDates(args.endDate),
@@ -154,7 +164,9 @@ const insightQueries = {
   /**
    * Sends combined charting data for trends and summaries.
    */
-  async insightsConversation(_root, args: IListArgs) {
+  async insightsConversation(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const filterSelector = getFilterSelector(args);
 
     const selector = await getConversationSelector(filterSelector);
@@ -182,7 +194,9 @@ const insightQueries = {
   /**
    * Calculates average first response time for each team members.
    */
-  async insightsFirstResponse(_root, args: IListArgs) {
+  async insightsFirstResponse(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const { startDate, endDate } = args;
     const filterSelector = getFilterSelector(args);
     const { start, end } = fixDates(startDate, endDate);
@@ -264,7 +278,9 @@ const insightQueries = {
   /**
    * Calculates average response close time for each team members.
    */
-  async insightsResponseClose(_root, args: IListArgs, { user }: { user: IUserDocument }) {
+  async insightsResponseClose(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const { startDate, endDate } = args;
     const { start, end } = fixDates(startDate, endDate);
 
@@ -397,7 +413,9 @@ const insightQueries = {
   /**
    * Calculates average ConversationMessages frequency time for second
    */
-  async insightsConversationSummary(_root, args: IListArgs) {
+  async insightsConversationSummary(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const { startDate, endDate, integrationIds, brandIds } = args;
     const { start, end } = fixDates(startDate, endDate);
 
@@ -453,7 +471,7 @@ const insightQueries = {
 
     if (insightAggregateData.length === 0) {
       return {
-        avg: [{ title: 'Average all operator response time', count: 0 }],
+        avg: [{ title: 'Response time of the operator', count: 0 }],
         trend: [],
         teamMembers: [],
       };
@@ -482,7 +500,7 @@ const insightQueries = {
     }
 
     return {
-      avg: [{ title: 'Average all operator response time', count: averageTotal }],
+      avg: [{ title: 'Response time of the operator', count: averageTotal }],
       trend: summaryChart,
       teamMembers: perUserChart,
     };
@@ -491,7 +509,9 @@ const insightQueries = {
   /**
    * Calculates average ConversationMessages spec CustomerAvg
    */
-  async insightsConversationCustomerAvg(_root, args: IListArgs) {
+  async insightsConversationCustomerAvg(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const { startDate, endDate, integrationIds, brandIds } = args;
     const { start, end } = fixDates(startDate, endDate);
 
@@ -529,7 +549,7 @@ const insightQueries = {
 
     return [
       {
-        title: 'Average all customer response time',
+        title: 'Response time of the customer',
         count: insightAggregateCustomer.length ? insightAggregateCustomer[0].avgSecond : 0,
       },
     ];
@@ -538,7 +558,9 @@ const insightQueries = {
   /**
    * Calculates average ConversationMessages spec InternalMsgsAvg
    */
-  async insightsConversationInternalAvg(_root, args: IListArgs) {
+  async insightsConversationInternalAvg(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const { startDate, endDate, integrationIds, brandIds } = args;
     const { start, end } = fixDates(startDate, endDate);
 
@@ -577,7 +599,7 @@ const insightQueries = {
 
     return [
       {
-        title: 'Average internal response time',
+        title: 'Response time of the internal message',
         count: insightAggregateInternal.length ? insightAggregateInternal[0].avgSecond : 0,
       },
     ];
@@ -586,7 +608,9 @@ const insightQueries = {
   /**
    * Calculates average ConversationMessages spec Overall
    */
-  async insightsConversationOverallAvg(_root, args: IListArgs) {
+  async insightsConversationOverallAvg(_root, args: IListArgs, { user }: IContext) {
+    registerOnboardHistory({ type: 'showInsights', user });
+
     const { startDate, endDate, integrationIds, brandIds } = args;
     const { start, end } = fixDates(startDate, endDate);
 
@@ -684,11 +708,11 @@ const insightQueries = {
 
     return [
       {
-        title: 'Overall average',
+        title: 'Wait time between messages',
         count: insightAggregateAllAvg.length ? insightAggregateAllAvg[0].avgSecond : 0,
       },
       {
-        title: 'Summary duration average',
+        title: 'Duration time up until the conversation is resolved',
         count: insightAggregateDurationAvg.length ? insightAggregateDurationAvg[0].avgSecond : 0,
       },
     ];

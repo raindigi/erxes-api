@@ -1,8 +1,8 @@
 import { Brands, Channels, ConversationMessages, Conversations, Tags } from '../../../db/models';
-import { CONVERSATION_STATUSES } from '../../../db/models/definitions/constants';
-import { IUserDocument } from '../../../db/models/definitions/users';
-import { INTEGRATION_KIND_CHOICES } from '../../constants';
+import { CONVERSATION_STATUSES, KIND_CHOICES } from '../../../db/models/definitions/constants';
+import { IMessageDocument } from '../../../db/models/definitions/conversationMessages';
 import { checkPermission, moduleRequireLogin } from '../../permissions/wrappers';
+import { IContext } from '../../types';
 import QueryBuilder, { IListArgs } from './conversationQueryBuilder';
 
 interface ICountBy {
@@ -37,7 +37,7 @@ const countByChannels = async (qb: any): Promise<ICountBy> => {
 const countByIntegrationTypes = async (qb: any): Promise<ICountBy> => {
   const byIntegrationTypes: ICountBy = {};
 
-  for (const intT of INTEGRATION_KIND_CHOICES.ALL) {
+  for (const intT of KIND_CHOICES.ALL) {
     byIntegrationTypes[intT] = await count({
       ...qb.mainQuery(),
       ...(await qb.integrationTypeFilter(intT)),
@@ -71,7 +71,7 @@ const countByBrands = async (qb: any): Promise<ICountBy> => {
   for (const brand of brands) {
     byBrands[brand._id] = await count({
       ...qb.mainQuery(),
-      ...qb.intersectIntegrationIds(qb.queries.channel, await qb.brandFilter(brand._id)),
+      ...(await qb.intersectIntegrationIds(qb.queries.channel, await qb.brandFilter(brand._id))),
     });
   }
 
@@ -82,7 +82,7 @@ const conversationQueries = {
   /**
    * Conversations list
    */
-  async conversations(_root, params: IListArgs, { user }: { user: IUserDocument }) {
+  async conversations(_root, params: IListArgs, { user }: IContext) {
     // filter by ids of conversations
     if (params && params.ids) {
       return Conversations.find({ _id: { $in: params.ids } }).sort({
@@ -112,26 +112,34 @@ const conversationQueries = {
       conversationId,
       skip,
       limit,
+      getFirst,
     }: {
       conversationId: string;
       skip: number;
       limit: number;
+      getFirst: boolean;
     },
   ) {
     const query = { conversationId };
 
+    let messages: IMessageDocument[] = [];
+
     if (limit) {
-      const messages = await ConversationMessages.find(query)
-        .sort({ createdAt: -1 })
+      const sort = getFirst ? { createdAt: 1 } : { createdAt: -1 };
+
+      messages = await ConversationMessages.find(query)
+        .sort(sort)
         .skip(skip || 0)
         .limit(limit);
 
-      return messages.reverse();
+      return getFirst ? messages : messages.reverse();
     }
 
-    return ConversationMessages.find(query)
-      .sort({ createdAt: 1 })
+    messages = await ConversationMessages.find(query)
+      .sort({ createdAt: -1 })
       .limit(50);
+
+    return messages.reverse();
   },
 
   /**
@@ -141,10 +149,40 @@ const conversationQueries = {
     return ConversationMessages.countDocuments({ conversationId });
   },
 
+  async converstationFacebookComments(
+    _root,
+    {
+      postId,
+      isResolved,
+      commentId,
+      limit,
+      senderId,
+    }: { commentId: string; isResolved: string; postId: string; senderId: string; limit: number },
+    { dataSources }: IContext,
+  ) {
+    return dataSources.IntegrationsAPI.fetchApi('/facebook/get-comments', {
+      postId,
+      isResolved,
+      commentId,
+      senderId,
+      limit: limit || 10,
+    });
+  },
+
+  async converstationFacebookCommentsCount(
+    _root,
+    { postId, isResolved }: { postId: string; isResolved: string },
+    { dataSources }: IContext,
+  ) {
+    return dataSources.IntegrationsAPI.fetchApi('/facebook/get-comments-count', {
+      postId,
+      isResolved,
+    });
+  },
   /**
    * Group conversation counts by brands, channels, integrations, status
    */
-  async conversationCounts(_root, params: IListArgs, { user }: { user: IUserDocument }) {
+  async conversationCounts(_root, params: IListArgs, { user }: IContext) {
     const { only } = params;
 
     const response: IConversationRes = {};
@@ -176,36 +214,40 @@ const conversationQueries = {
         break;
     }
 
-    // unassigned count
-    response.unassigned = await count({
+    const mainQuery = {
       ...qb.mainQuery(),
       ...queries.integrations,
       ...queries.integrationType,
+    };
+
+    // unassigned count
+    response.unassigned = await count({
+      ...mainQuery,
       ...qb.unassignedFilter(),
     });
 
     // participating count
     response.participating = await count({
-      ...qb.mainQuery(),
-      ...queries.integrations,
-      ...queries.integrationType,
+      ...mainQuery,
       ...qb.participatingFilter(),
     });
 
     // starred count
     response.starred = await count({
-      ...qb.mainQuery(),
-      ...queries.integrations,
-      ...queries.integrationType,
+      ...mainQuery,
       ...qb.starredFilter(),
     });
 
     // resolved count
     response.resolved = await count({
-      ...qb.mainQuery(),
-      ...queries.integrations,
-      ...queries.integrationType,
+      ...mainQuery,
       ...qb.statusFilter(['closed']),
+    });
+
+    // awaiting response count
+    response.awaitingResponse = await count({
+      ...mainQuery,
+      ...qb.awaitingResponse(),
     });
 
     return response;
@@ -221,7 +263,7 @@ const conversationQueries = {
   /**
    * Get all conversations count. We will use it in pager
    */
-  async conversationsTotalCount(_root, params: IListArgs, { user }: { user: IUserDocument }) {
+  async conversationsTotalCount(_root, params: IListArgs, { user }: IContext) {
     // initiate query builder
     const qb = new QueryBuilder(params, {
       _id: user._id,
@@ -236,7 +278,7 @@ const conversationQueries = {
   /**
    * Get last conversation
    */
-  async conversationsGetLast(_root, params: IListArgs, { user }: { user: IUserDocument }) {
+  async conversationsGetLast(_root, params: IListArgs, { user }: IContext) {
     // initiate query builder
     const qb = new QueryBuilder(params, {
       _id: user._id,
@@ -251,9 +293,10 @@ const conversationQueries = {
   /**
    * Get all unread conversations for logged in user
    */
-  async conversationsTotalUnreadCount(_root, _args, { user }: { user: IUserDocument }) {
+  async conversationsTotalUnreadCount(_root, _args, { user }: IContext) {
     // initiate query builder
     const qb = new QueryBuilder({}, { _id: user._id });
+    await qb.buildAllQueries();
 
     // get all possible integration ids
     const integrationsFilter = await qb.integrationsFilter();

@@ -1,12 +1,23 @@
-import { Channels, Users } from '../../../db/models';
-import { IDetail, IEmailSignature, ILink, IUser, IUserDocument } from '../../../db/models/definitions/users';
+import * as telemetry from 'erxes-telemetry';
+import * as express from 'express';
+import { Channels, Configs, Users } from '../../../db/models';
+import { ILink } from '../../../db/models/definitions/common';
+import { IDetail, IEmailSignature, IUser } from '../../../db/models/definitions/users';
+import messageBroker from '../../../messageBroker';
+import { resetPermissionsCache } from '../../permissions/utils';
 import { checkPermission, requireLogin } from '../../permissions/wrappers';
-import utils, { authCookieOptions, getEnv } from '../../utils';
+import { IContext } from '../../types';
+import utils, { authCookieOptions, getEnv, sendRequest } from '../../utils';
 
 interface IUsersEdit extends IUser {
   channelIds?: string[];
-  groupIds?: string[];
   _id: string;
+}
+
+interface ILogin {
+  email: string;
+  password: string;
+  deviceToken?: string;
 }
 
 const sendInvitationEmail = ({ email, token }: { email: string; token: string }) => {
@@ -22,23 +33,78 @@ const sendInvitationEmail = ({ email, token }: { email: string; token: string })
         content: confirmationUrl,
         domain: MAIN_APP_DOMAIN,
       },
-      isCustom: true,
     },
   });
 };
 
+const login = async (args: ILogin, res: express.Response, secure: boolean) => {
+  const response = await Users.login(args);
+
+  const { token } = response;
+
+  res.cookie('auth-token', token, authCookieOptions(secure));
+
+  telemetry.trackCli('logged_in');
+
+  return 'loggedIn';
+};
+
 const userMutations = {
+  async usersCreateOwner(
+    _root,
+    {
+      email,
+      password,
+      firstName,
+      lastName,
+      subscribeEmail,
+    }: { email: string; password: string; firstName: string; lastName?: string; subscribeEmail?: boolean },
+  ) {
+    const userCount = await Users.countDocuments();
+
+    if (userCount > 0) {
+      throw new Error('Access denied');
+    }
+
+    const doc: IUser = {
+      isOwner: true,
+      email,
+      password,
+      details: {
+        fullName: `${firstName} ${lastName || ''}`,
+      },
+    };
+
+    const user = await Users.createUser(doc);
+
+    if (subscribeEmail && process.env.NODE_ENV === 'production') {
+      await sendRequest({
+        url: 'https://erxes.io/subscribe',
+        method: 'POST',
+        body: {
+          email,
+          firstName,
+          lastName,
+        },
+      });
+    }
+
+    await Configs.createOrUpdateConfig({ code: 'UPLOAD_SERVICE_TYPE', value: 'local' });
+
+    await messageBroker().sendMessage('erxes-api:integrations-notification', {
+      type: 'addUserId',
+      payload: {
+        _id: user._id,
+      },
+    });
+
+    return 'success';
+  },
   /*
    * Login
    */
-  async login(_root, args: { email: string; password: string; deviceToken?: string }, { res }) {
-    const response = await Users.login(args);
-
-    const { token } = response;
-
-    res.cookie('auth-token', token, authCookieOptions());
-
-    return 'loggedIn';
+  async login(_root, args: ILogin, { res, requestInfo }: IContext) {
+    return login(args, res, requestInfo.secure);
   },
 
   async logout(_root, _args, { res }) {
@@ -57,7 +123,7 @@ const userMutations = {
 
     const link = `${MAIN_APP_DOMAIN}/reset-password?token=${token}`;
 
-    utils.sendEmail({
+    await utils.sendEmail({
       toEmails: [email],
       title: 'Reset password',
       template: {
@@ -68,7 +134,7 @@ const userMutations = {
       },
     });
 
-    return link;
+    return 'sent';
   },
 
   /*
@@ -79,13 +145,16 @@ const userMutations = {
   },
 
   /*
+   * Reset member's password
+   */
+  usersResetMemberPassword(_root, args: { _id: string; newPassword: string }) {
+    return Users.resetMemberPassword(args);
+  },
+
+  /*
    * Change user password
    */
-  usersChangePassword(
-    _root,
-    args: { currentPassword: string; newPassword: string },
-    { user }: { user: IUserDocument },
-  ) {
+  usersChangePassword(_root, args: { currentPassword: string; newPassword: string }, { user }: IContext) {
     return Users.changePassword({ _id: user._id, ...args });
   },
 
@@ -93,7 +162,7 @@ const userMutations = {
    * Update user
    */
   async usersEdit(_root, args: IUsersEdit) {
-    const { _id, username, email, channelIds = [], groupIds = [], details, links } = args;
+    const { _id, username, email, channelIds, groupIds = [], brandIds = [], details, links } = args;
 
     const updatedUser = await Users.updateUser(_id, {
       username,
@@ -101,10 +170,13 @@ const userMutations = {
       details,
       links,
       groupIds,
+      brandIds,
     });
 
     // add new user to channels
-    await Channels.updateUserChannels(channelIds, _id);
+    await Channels.updateUserChannels(channelIds || [], _id);
+
+    await resetPermissionsCache();
 
     return updatedUser;
   },
@@ -127,13 +199,9 @@ const userMutations = {
       details: IDetail;
       links: ILink;
     },
-    { user }: { user: IUserDocument },
+    { user }: IContext,
   ) {
-    const userOnDb = await Users.findOne({ _id: user._id });
-
-    if (!userOnDb) {
-      throw new Error('User not found');
-    }
+    const userOnDb = await Users.getUser(user._id);
 
     const valid = await Users.comparePassword(password, userOnDb.password);
 
@@ -148,7 +216,7 @@ const userMutations = {
   /*
    * Set Active or inactive user
    */
-  async usersSetActiveStatus(_root, { _id }: { _id: string }, { user }: { user: IUserDocument }) {
+  async usersSetActiveStatus(_root, { _id }: { _id: string }, { user }: IContext) {
     if (user._id === _id) {
       throw new Error('You can not delete yourself');
     }
@@ -159,11 +227,11 @@ const userMutations = {
   /*
    * Invites users to team members
    */
-  async usersInvite(_root, { entries }: { entries: Array<{ email: string; groupId: string }> }) {
+  async usersInvite(_root, { entries }: { entries: Array<{ email: string; password: string; groupId: string }> }) {
     for (const entry of entries) {
       await Users.checkDuplication({ email: entry.email });
 
-      const token = await Users.createUserWithConfirmation(entry);
+      const token = await Users.invite(entry);
 
       sendInvitationEmail({ email: entry.email, token });
     }
@@ -178,13 +246,6 @@ const userMutations = {
     sendInvitationEmail({ email, token });
 
     return token;
-  },
-
-  /*
-   * User has seen onboard
-   */
-  async usersSeenOnBoard(_root, {}, { user }: { user: IUserDocument }) {
-    return Users.updateOnBoardSeen({ _id: user._id });
   },
 
   async usersConfirmInvitation(
@@ -203,18 +264,23 @@ const userMutations = {
       username?: string;
     },
   ) {
-    return Users.confirmInvitation({ token, password, passwordConfirmation, fullName, username });
+    const user = await Users.confirmInvitation({ token, password, passwordConfirmation, fullName, username });
+
+    await messageBroker().sendMessage('erxes-api:integrations-notification', {
+      type: 'addUserId',
+      payload: {
+        _id: user._id,
+      },
+    });
+
+    return user;
   },
 
-  usersConfigEmailSignatures(
-    _root,
-    { signatures }: { signatures: IEmailSignature[] },
-    { user }: { user: IUserDocument },
-  ) {
+  usersConfigEmailSignatures(_root, { signatures }: { signatures: IEmailSignature[] }, { user }: IContext) {
     return Users.configEmailSignatures(user._id, signatures);
   },
 
-  usersConfigGetNotificationByEmail(_root, { isAllowed }: { isAllowed: boolean }, { user }: { user: IUserDocument }) {
+  usersConfigGetNotificationByEmail(_root, { isAllowed }: { isAllowed: boolean }, { user }: IContext) {
     return Users.configGetNotificationByEmail(user._id, isAllowed);
   },
 };
@@ -228,5 +294,6 @@ checkPermission(userMutations, 'usersEdit', 'usersEdit');
 checkPermission(userMutations, 'usersInvite', 'usersInvite');
 checkPermission(userMutations, 'usersResendInvitation', 'usersInvite');
 checkPermission(userMutations, 'usersSetActiveStatus', 'usersSetActiveStatus');
+checkPermission(userMutations, 'usersResetMemberPassword', 'usersEdit');
 
 export default userMutations;

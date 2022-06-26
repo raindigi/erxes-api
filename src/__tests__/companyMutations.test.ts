@@ -1,13 +1,12 @@
 import * as faker from 'faker';
 import { graphqlRequest } from '../db/connection';
-import { companyFactory, customerFactory, userFactory } from '../db/factories';
+import { companyFactory, tagsFactory, userFactory } from '../db/factories';
 import { Companies, Customers, Users } from '../db/models';
 
 import './setup.ts';
 
 describe('Companies mutations', () => {
   let _company;
-  let _customer;
   let _user;
   let context;
 
@@ -22,6 +21,8 @@ describe('Companies mutations', () => {
     $industry: String
     $tagIds: [String]
     $customFieldsData: JSON
+    $parentCompanyId: String
+    $ownerId: String
   `;
 
   const commonParams = `
@@ -35,12 +36,13 @@ describe('Companies mutations', () => {
     industry: $industry
     tagIds: $tagIds
     customFieldsData: $customFieldsData
+    parentCompanyId: $parentCompanyId
+    ownerId: $ownerId
   `;
 
   beforeEach(async () => {
     // Creating test data
     _company = await companyFactory({});
-    _customer = await customerFactory({});
     _user = await userFactory({});
 
     context = { user: _user };
@@ -54,6 +56,9 @@ describe('Companies mutations', () => {
   });
 
   test('Add company', async () => {
+    const parent = await companyFactory();
+    const company = await companyFactory();
+
     const args = {
       primaryName: faker.company.companyName(),
       names: [faker.company.companyName()],
@@ -63,8 +68,8 @@ describe('Companies mutations', () => {
       emails: [faker.internet.email()],
       size: faker.random.number(),
       industry: 'Airlines',
-      tagIds: _company.tagIds,
-      customFieldsData: {},
+      tagIds: company.tagIds,
+      parentCompanyId: parent._id,
     };
 
     const mutation = `
@@ -80,27 +85,39 @@ describe('Companies mutations', () => {
           industry
           tagIds
           customFieldsData
+          parentCompanyId
         }
       }
     `;
 
-    const company = await graphqlRequest(mutation, 'companiesAdd', args, context);
+    const result = await graphqlRequest(mutation, 'companiesAdd', args, context);
 
-    expect(company.primaryName).toBe(args.primaryName);
-    expect(company.primaryPhone).toBe(args.primaryPhone);
-    expect(company.primaryEmail).toBe(args.primaryEmail);
-    expect(company.names).toEqual(expect.arrayContaining(args.names));
-    expect(company.phones).toEqual(expect.arrayContaining(args.phones));
-    expect(company.emails).toEqual(expect.arrayContaining(args.emails));
-    expect(company.size).toBe(args.size);
-    expect(company.industry).toBe(args.industry);
-    expect(expect.arrayContaining(company.tagIds)).toEqual(args.tagIds);
-    expect(company.customFieldsData).toEqual(args.customFieldsData);
+    expect(result.primaryName).toBe(args.primaryName);
+    expect(result.primaryPhone).toBe(args.primaryPhone);
+    expect(result.primaryEmail).toBe(args.primaryEmail);
+    expect(result.names).toEqual(expect.arrayContaining(args.names));
+    expect(result.phones).toEqual(expect.arrayContaining(args.phones));
+    expect(result.emails).toEqual(expect.arrayContaining(args.emails));
+    expect(result.size).toBe(args.size);
+    expect(result.industry).toBe(args.industry);
+    expect(expect.arrayContaining(result.tagIds)).toEqual(args.tagIds);
+    expect(result.customFieldsData.length).toEqual(0);
+    expect(result.parentCompanyId).toBe(parent._id);
   });
 
   test('Edit company', async () => {
+    const parent = await companyFactory();
+    const tag1 = await tagsFactory();
+    const tag2 = await tagsFactory();
+
+    const merged = await companyFactory();
+    const company = await companyFactory({
+      tagIds: [tag1._id],
+      mergedIds: [merged._id],
+    });
+
     const args = {
-      _id: _company._id,
+      _id: company._id,
       primaryName: faker.company.companyName(),
       names: [faker.company.companyName()],
       primaryPhone: faker.random.number().toString(),
@@ -109,8 +126,9 @@ describe('Companies mutations', () => {
       emails: [faker.internet.email()],
       size: faker.random.number(),
       industry: faker.random.word(),
-      tagIds: _company.tagIds,
-      customFieldsData: {},
+      ownerId: _user._id,
+      parentCompanyId: parent._id,
+      tagIds: [tag2._id],
     };
 
     const mutation = `
@@ -127,54 +145,29 @@ describe('Companies mutations', () => {
           industry
           tagIds
           customFieldsData
+          ownerId
+          parentCompanyId
+          mergedIds
         }
       }
     `;
 
-    const company = await graphqlRequest(mutation, 'companiesEdit', args, context);
+    const result = await graphqlRequest(mutation, 'companiesEdit', args, context);
 
-    expect(company._id).toBe(args._id);
-    expect(company.primaryName).toBe(args.primaryName);
-    expect(company.primaryPhone).toBe(args.primaryPhone);
-    expect(company.primaryEmail).toBe(args.primaryEmail);
-    expect(company.names).toEqual(expect.arrayContaining(args.names));
-    expect(company.phones).toEqual(expect.arrayContaining(args.phones));
-    expect(company.emails).toEqual(expect.arrayContaining(args.emails));
-    expect(company.size).toBe(args.size);
-    expect(company.industry).toBe(args.industry);
-    expect(expect.arrayContaining(company.tagIds)).toEqual(args.tagIds);
-    expect(company.customFieldsData).toEqual(args.customFieldsData);
-  });
-
-  test('Edit customer of company', async () => {
-    const args = {
-      _id: _company._id,
-      customerIds: [_customer._id],
-    };
-
-    const mutation = `
-      mutation companiesEditCustomers(
-        $_id: String!
-        $customerIds: [String]
-      ) {
-        companiesEditCustomers(
-          _id: $_id
-          customerIds: $customerIds
-        ) {
-          _id
-        }
-      }
-    `;
-
-    await graphqlRequest(mutation, 'companiesEditCustomers', args, context);
-
-    const customer = await Customers.findOne({ _id: _customer._id });
-
-    if (!customer) {
-      throw new Error('Customer not found');
-    }
-
-    expect(customer.companyIds).toContain(_company._id);
+    expect(result._id).toBe(args._id);
+    expect(result.primaryName).toBe(args.primaryName);
+    expect(result.primaryPhone).toBe(args.primaryPhone);
+    expect(result.primaryEmail).toBe(args.primaryEmail);
+    expect(result.names).toEqual(expect.arrayContaining(args.names));
+    expect(result.phones).toEqual(expect.arrayContaining(args.phones));
+    expect(result.emails).toEqual(expect.arrayContaining(args.emails));
+    expect(result.size).toBe(args.size);
+    expect(result.industry).toBe(args.industry);
+    expect(expect.arrayContaining(result.tagIds)).toEqual(args.tagIds);
+    expect(result.customFieldsData.length).toEqual(0);
+    expect(result.ownerId).toBe(_user._id);
+    expect(result.parentCompanyId).toBe(parent._id);
+    expect(result.mergedIds.length).toBe(1);
   });
 
   test('Remove company', async () => {
@@ -184,9 +177,17 @@ describe('Companies mutations', () => {
       }
     `;
 
-    await graphqlRequest(mutation, 'companiesRemove', { companyIds: [_company._id] }, context);
+    const tag = await tagsFactory();
 
-    expect(await Companies.find({ companyIds: [_company._id] })).toEqual([]);
+    const company = await companyFactory({
+      ownerId: _user._id,
+      mergedIds: [_company._id],
+      tagIds: [tag._id],
+    });
+
+    await graphqlRequest(mutation, 'companiesRemove', { companyIds: [company._id] }, context);
+
+    expect(await Companies.find({ companyIds: [company._id] })).toEqual([]);
   });
 
   test('Merge company', async () => {

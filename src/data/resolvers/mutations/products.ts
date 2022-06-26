@@ -1,10 +1,15 @@
-import { Products } from '../../../db/models';
-import { IProduct } from '../../../db/models/definitions/deals';
-import { IUserDocument } from '../../../db/models/definitions/users';
+import { ProductCategories, Products } from '../../../db/models';
+import { IProduct, IProductCategory, IProductDocument } from '../../../db/models/definitions/deals';
+import { MODULE_NAMES } from '../../constants';
+import { putCreateLog, putDeleteLog, putUpdateLog } from '../../logUtils';
 import { moduleCheckPermission } from '../../permissions/wrappers';
-import { putCreateLog, putDeleteLog, putUpdateLog } from '../../utils';
+import { IContext } from '../../types';
 
 interface IProductsEdit extends IProduct {
+  _id: string;
+}
+
+interface IProductCategoriesEdit extends IProductCategory {
   _id: string;
 }
 
@@ -13,20 +18,21 @@ const productMutations = {
    * Creates a new product
    * @param {Object} doc Product document
    */
-  async productsAdd(_root, doc: IProduct, { user }: { user: IUserDocument }) {
-    const product = await Products.createProduct(doc);
+  async productsAdd(_root, doc: IProduct, { user, docModifier }: IContext) {
+    const product = await Products.createProduct(docModifier(doc));
 
-    if (product) {
-      await putCreateLog(
-        {
-          type: 'product',
-          newData: JSON.stringify(doc),
-          object: product,
-          description: `${product.name} has been created`,
+    await putCreateLog(
+      {
+        type: MODULE_NAMES.PRODUCT,
+        newData: {
+          ...doc,
+          categoryId: product.categoryId,
+          customFieldsData: product.customFieldsData,
         },
-        user,
-      );
-    }
+        object: product,
+      },
+      user,
+    );
 
     return product;
   },
@@ -36,21 +42,19 @@ const productMutations = {
    * @param {string} param2._id Product id
    * @param {Object} param2.doc Product info
    */
-  async productsEdit(_root, { _id, ...doc }: IProductsEdit, { user }: { user: IUserDocument }) {
-    const product = await Products.findOne({ _id });
+  async productsEdit(_root, { _id, ...doc }: IProductsEdit, { user }: IContext) {
+    const product = await Products.getProduct({ _id });
     const updated = await Products.updateProduct(_id, doc);
 
-    if (product) {
-      await putUpdateLog(
-        {
-          type: 'product',
-          object: product,
-          newData: JSON.stringify(doc),
-          description: `${product.name} has been edited`,
-        },
-        user,
-      );
-    }
+    await putUpdateLog(
+      {
+        type: MODULE_NAMES.PRODUCT,
+        object: product,
+        newData: { ...doc, customFieldsData: updated.customFieldsData },
+        updatedDocument: updated,
+      },
+      user,
+    );
 
     return updated;
   },
@@ -59,20 +63,68 @@ const productMutations = {
    * Removes a product
    * @param {string} param1._id Product id
    */
-  async productsRemove(_root, { _id }: { _id: string }, { user }: { user: IUserDocument }) {
-    const product = await Products.findOne({ _id });
-    const removed = await Products.removeProduct(_id);
+  async productsRemove(_root, { productIds }: { productIds: string[] }, { user }: IContext) {
+    const products: IProductDocument[] = await Products.find({ _id: { $in: productIds } }).lean();
 
-    if (product) {
-      await putDeleteLog(
-        {
-          type: 'product',
-          object: product,
-          description: `${product.name} has been removed`,
-        },
-        user,
-      );
+    await Products.removeProducts(productIds);
+
+    for (const product of products) {
+      await putDeleteLog({ type: MODULE_NAMES.PRODUCT, object: product }, user);
     }
+
+    return productIds;
+  },
+
+  /**
+   * Creates a new product category
+   * @param {Object} doc Product category document
+   */
+  async productCategoriesAdd(_root, doc: IProductCategory, { user, docModifier }: IContext) {
+    const productCategory = await ProductCategories.createProductCategory(docModifier(doc));
+
+    await putCreateLog(
+      {
+        type: MODULE_NAMES.PRODUCT_CATEGORY,
+        newData: { ...doc, order: productCategory.order },
+        object: productCategory,
+      },
+      user,
+    );
+
+    return productCategory;
+  },
+
+  /**
+   * Edits a product category
+   * @param {string} param2._id ProductCategory id
+   * @param {Object} param2.doc ProductCategory info
+   */
+  async productCategoriesEdit(_root, { _id, ...doc }: IProductCategoriesEdit, { user }: IContext) {
+    const productCategory = await ProductCategories.getProductCatogery({ _id });
+    const updated = await ProductCategories.updateProductCategory(_id, doc);
+
+    await putUpdateLog(
+      {
+        type: MODULE_NAMES.PRODUCT_CATEGORY,
+        object: productCategory,
+        newData: doc,
+        updatedDocument: updated,
+      },
+      user,
+    );
+
+    return updated;
+  },
+
+  /**
+   * Removes a product category
+   * @param {string} param1._id ProductCategory id
+   */
+  async productCategoriesRemove(_root, { _id }: { _id: string }, { user }: IContext) {
+    const productCategory = await ProductCategories.getProductCatogery({ _id });
+    const removed = await ProductCategories.removeProductCategory(_id);
+
+    await putDeleteLog({ type: MODULE_NAMES.PRODUCT_CATEGORY, object: productCategory }, user);
 
     return removed;
   },

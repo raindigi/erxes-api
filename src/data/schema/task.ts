@@ -1,29 +1,18 @@
-const commonTypes = `
-  order: Int
-  createdAt: Date
-`;
+import { commonDragParams, commonMutationParams, commonTypes, conformityQueryFields, copyParams } from './common';
 
 export const types = `
   type Task {
     _id: String!
-    name: String!
-    stageId: String
-    boardId: String
-    companyIds: [String]
-    customerIds: [String]
-    assignedUserIds: [String]
-    closeDate: Date
-    description: String
-    priority: String
     companies: [Company]
     customers: [Customer]
-    assignedUsers: [User]
-    isWatched: Boolean
-    stage: Stage
-    pipeline: Pipeline
-    modifiedAt: Date
-    modifiedBy: String
+    timeTrack: TimeTrack
     ${commonTypes}
+  }
+
+  type TimeTrack {
+    status: String,
+    timeSpent: Int,
+    startDate: String
   }
 `;
 
@@ -38,32 +27,25 @@ export const queries = `
     skip: Int
     search: String
     assignedUserIds: [String]
-    nextDay: String
-    nextWeek: String
-    nextMonth: String
-    noCloseDate: String
-    overdue: String
+    closeDateType: String
     priority: [String]
+    labelIds: [String]
+    sortField: String
+    sortDirection: Int
+    userIds: [String]
+    ${conformityQueryFields}
   ): [Task]
-`;
-
-const commonParams = `
-  name: String!,
-  stageId: String,
-  assignedUserIds: [String],
-  companyIds: [String],
-  customerIds: [String],
-  closeDate: Date,
-  description: String,
-  order: Int,
-  priority: String,
+  archivedTasks(pipelineId: String!, search: String, page: Int, perPage: Int): [Task]
+  archivedTasksCount(pipelineId: String!, search: String): Int
 `;
 
 export const mutations = `
-  tasksAdd(${commonParams}): Task
-  tasksEdit(_id: String!, ${commonParams}): Task
-  tasksChange( _id: String!, destinationStageId: String): Task
-  tasksUpdateOrder(stageId: String!, orders: [OrderItem]): [Task]
+  tasksAdd(name: String!, ${copyParams}, ${commonMutationParams}): Task
+  tasksEdit(_id: String!, name: String, ${commonMutationParams}): Task
+  tasksChange(${commonDragParams}): Task
   tasksRemove(_id: String!): Task
   tasksWatch(_id: String, isAdd: Boolean): Task
+  tasksCopy(_id: String!, proccessId: String): Task
+  tasksArchive(stageId: String!, proccessId: String): String
+  taskUpdateTimeTracking(_id: String!, status: String!, timeSpent: Int!, startDate: String): JSON
 `;

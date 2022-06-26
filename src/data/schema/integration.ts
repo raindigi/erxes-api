@@ -9,13 +9,19 @@ export const types = `
     formId: String
     tagIds: [String]
     tags: [Tag]
-    formData: JSON
+    leadData: JSON
     messengerData: JSON
     uiOptions: JSON
+    isActive: Boolean
+    webhookData: JSON
 
     brand: Brand
     form: Form
     channels: [Channel]
+
+    websiteMessengerApps: [MessengerApp]
+    knowledgeBaseMessengerApps: [MessengerApp]
+    leadMessengerApps: [MessengerApp]
   }
 
   type integrationsTotalCount {
@@ -26,7 +32,12 @@ export const types = `
     byKind: JSON
   }
 
-  input IntegrationFormData {
+  type integrationsGetUsedTypes {
+    _id: String
+    name: String
+  }
+
+  input IntegrationLeadData {
     loadType: String
     successAction: String
     fromEmail: String,
@@ -37,6 +48,10 @@ export const types = `
     adminEmailContent: String
     thankContent: String
     redirectUrl: String
+    themeColor: String
+    callout: JSON,
+    rules: [InputRule]
+    isRequireOnce: Boolean
   }
 
   input MessengerOnlineHoursSchema {
@@ -55,6 +70,7 @@ export const types = `
   input IntegrationMessengerData {
     _id: String
     notifyCustomer: Boolean
+    botEndpointUrl: String
     availabilityMethod: String
     isOnline: Boolean,
     onlineHours: [MessengerOnlineHoursSchema]
@@ -67,12 +83,14 @@ export const types = `
     showChat: Boolean
     showLauncher: Boolean
     forceLogoutWhenResolve: Boolean
+    showVideoCallRequest: Boolean
   }
 
   input MessengerUiOptions {
     color: String
     wallpaper: String
     logo: String
+    textColor: String
   }
 `;
 
@@ -87,6 +105,8 @@ export const queries = `
     tag: String
   ): [Integration]
 
+  integrationsGetUsedTypes: [integrationsGetUsedTypes]
+  integrationGetLineWebhookUrl(_id: String!): String
   integrationDetail(_id: String!): Integration
   integrationsTotalCount: integrationsTotalCount
   integrationsFetchApi(path: String!, params: JSON!): JSON
@@ -97,6 +117,7 @@ export const mutations = `
     name: String!,
     brandId: String!,
     languageCode: String
+    channelIds: [String]
     ): Integration
 
   integrationsEditMessengerIntegration(
@@ -104,6 +125,7 @@ export const mutations = `
     name: String!,
     brandId: String!,
     languageCode: String
+    channelIds: [String]
   ): Integration
 
   integrationsSaveMessengerAppearanceData(
@@ -114,28 +136,58 @@ export const mutations = `
     _id: String!,
     messengerData: IntegrationMessengerData): Integration
 
-  integrationsCreateFormIntegration(
+  integrationsCreateLeadIntegration(
     name: String!,
     brandId: String!,
     languageCode: String,
     formId: String!,
-    formData: IntegrationFormData!): Integration
+    leadData: IntegrationLeadData!): Integration
 
-  integrationsEditFormIntegration(
+  integrationsEditLeadIntegration(
     _id: String!
     name: String!,
     brandId: String!,
     languageCode: String,
     formId: String!,
-    formData: IntegrationFormData!): Integration
+    leadData: IntegrationLeadData!): Integration
 
   integrationsCreateExternalIntegration(
     kind: String!,
     name: String!,
     brandId: String!,
-    accountId: String!,
+    accountId: String,
+    channelIds: [String]
     data: JSON): Integration
+
+  integrationsEditCommonFields(_id: String!, name: String!, brandId: String!, channelIds: [String], data: JSON): Integration
 
   integrationsRemove(_id: String!): JSON
   integrationsRemoveAccount(_id: String!): JSON
+
+  integrationsArchive(_id: String!, status: Boolean!): Integration
+
+  integrationSendMail(
+    erxesApiId: String!
+    subject: String!
+    body: String
+    to: [String]!
+    cc: [String]
+    bcc: [String]
+    from: String!
+    shouldResolve: Boolean
+    headerId: String
+    replyTo: [String]
+    inReplyTo: String
+    threadId: String
+    messageId: String
+    replyToMessageId: String
+    kind: String
+    references: [String]
+    attachments: [JSON]
+    customerId: String
+  ): JSON
+
+  integrationsUpdateConfigs(configsMap: JSON!): JSON
+
+  integrationsSendSms(integrationId: String!, content: String!, to: String!): JSON
 `;

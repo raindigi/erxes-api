@@ -1,18 +1,34 @@
 import { Model, model } from 'mongoose';
 import * as strip from 'strip';
 import { Conversations } from '.';
+import { MESSAGE_TYPES } from './definitions/constants';
 import { IMessage, IMessageDocument, messageSchema } from './definitions/conversationMessages';
 
 export interface IMessageModel extends Model<IMessageDocument> {
+  getMessage(_id: string): Promise<IMessageDocument>;
   createMessage(doc: IMessage): Promise<IMessageDocument>;
   addMessage(doc: IMessage, userId?: string): Promise<IMessageDocument>;
-  getNonAsnweredMessage(conversationId: string): Promise<IMessageDocument>;
-  getAdminMessages(conversationId: string): Promise<IMessageDocument[]>;
+  getNonAsnweredMessage(conversationId: string);
+  getAdminMessages(conversationId: string);
+  widgetsGetUnreadMessagesCount(conversationId: string): Promise<number>;
   markSentAsReadMessages(conversationId: string): Promise<IMessageDocument>;
+  forceReadCustomerPreviousEngageMessages(customerId: string): Promise<IMessageDocument>;
 }
 
 export const loadClass = () => {
   class Message {
+    /**
+     * Retreives message
+     */
+    public static async getMessage(_id: string) {
+      const message = await Messages.findOne({ _id });
+
+      if (!message) {
+        throw new Error('Conversation message not found');
+      }
+
+      return message;
+    }
     /**
      * Create a message
      */
@@ -20,24 +36,24 @@ export const loadClass = () => {
       const message = await Messages.create({
         internal: false,
         ...doc,
-        createdAt: new Date(),
+        createdAt: doc.createdAt || new Date(),
       });
 
       const messageCount = await Messages.find({
         conversationId: message.conversationId,
       }).countDocuments();
 
-      await Conversations.updateOne(
-        { _id: message.conversationId },
-        {
-          $set: {
-            messageCount,
+      // update conversation ====
+      const convDocModifier: { messageCount?: number; updatedAt: Date; isCustomerRespondedLast?: boolean } = {
+        updatedAt: new Date(),
+      };
 
-            // updating updatedAt
-            updatedAt: new Date(),
-          },
-        },
-      );
+      if (!doc.fromBot) {
+        convDocModifier.messageCount = messageCount;
+        convDocModifier.isCustomerRespondedLast = doc.customerId ? true : false;
+      }
+
+      await Conversations.updateConversation(message.conversationId, convDocModifier);
 
       if (message.userId) {
         // add created user to participators
@@ -45,9 +61,7 @@ export const loadClass = () => {
       }
 
       // add mentioned users to participators
-      if (message.mentionedUserIds) {
-        await Conversations.addManyParticipatedUsers(message.conversationId, message.mentionedUserIds);
-      }
+      await Conversations.addManyParticipatedUsers(message.conversationId, message.mentionedUserIds || []);
 
       return message;
     }
@@ -71,8 +85,11 @@ export const loadClass = () => {
       doc.content = content;
       doc.attachments = attachments;
 
+      // <img> tags wrapped inside empty <p> tag should be allowed
+      const contentValid = content.indexOf('<img') !== -1 ? true : strip(content);
+
       // if there is no attachments and no content then throw content required error
-      if (attachments.length === 0 && !strip(content)) {
+      if (doc.contentType !== MESSAGE_TYPES.VIDEO_CALL && attachments.length === 0 && !contentValid) {
         throw new Error('Content is required');
       }
 
@@ -83,7 +100,7 @@ export const loadClass = () => {
         firstRespondedDate?: Date;
       } = {};
 
-      if (!doc.fromBot) {
+      if (!doc.fromBot && !doc.internal) {
         modifier.content = doc.content;
       }
 
@@ -92,7 +109,7 @@ export const loadClass = () => {
         modifier.firstRespondedDate = new Date();
       }
 
-      await Conversations.updateOne({ _id: doc.conversationId }, { $set: modifier });
+      await Conversations.updateConversation(doc.conversationId, modifier);
 
       return this.createMessage({ ...doc, userId });
     }
@@ -114,11 +131,20 @@ export const loadClass = () => {
       return Messages.find({
         conversationId,
         userId: { $exists: true },
-        isCustomerRead: false,
+        isCustomerRead: { $ne: true },
 
         // exclude internal notes
         internal: false,
       }).sort({ createdAt: 1 });
+    }
+
+    public static widgetsGetUnreadMessagesCount(conversationId: string) {
+      return Messages.countDocuments({
+        conversationId,
+        userId: { $exists: true },
+        internal: false,
+        isCustomerRead: { $ne: true },
+      });
     }
 
     /**
@@ -129,7 +155,23 @@ export const loadClass = () => {
         {
           conversationId,
           userId: { $exists: true },
-          isCustomerRead: { $exists: false },
+          isCustomerRead: { $ne: true },
+        },
+        { $set: { isCustomerRead: true } },
+        { multi: true },
+      );
+    }
+
+    /**
+     * Force read previous unread engage messages ============
+     */
+    public static forceReadCustomerPreviousEngageMessages(customerId: string) {
+      return Messages.updateMany(
+        {
+          customerId,
+          engageData: { $exists: true },
+          'engageData.engageKind': { $ne: 'auto' },
+          isCustomerRead: { $ne: true },
         },
         { $set: { isCustomerRead: true } },
         { multi: true },

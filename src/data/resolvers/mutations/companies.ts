@@ -1,8 +1,9 @@
 import { Companies } from '../../../db/models';
 import { ICompany } from '../../../db/models/definitions/companies';
-import { IUserDocument } from '../../../db/models/definitions/users';
+import { MODULE_NAMES } from '../../constants';
+import { putCreateLog, putDeleteLog, putUpdateLog } from '../../logUtils';
 import { checkPermission } from '../../permissions/wrappers';
-import { putCreateLog, putDeleteLog, putUpdateLog } from '../../utils';
+import { IContext } from '../../types';
 
 interface ICompaniesEdit extends ICompany {
   _id: string;
@@ -10,17 +11,16 @@ interface ICompaniesEdit extends ICompany {
 
 const companyMutations = {
   /**
-   * Create new company also adds Company registration log
+   * Creates a new company
    */
-  async companiesAdd(_root, doc: ICompany, { user }: { user: IUserDocument }) {
-    const company = await Companies.createCompany(doc, user);
+  async companiesAdd(_root, doc: ICompany, { user, docModifier }: IContext) {
+    const company = await Companies.createCompany(docModifier(doc), user);
 
     await putCreateLog(
       {
-        type: 'company',
-        newData: JSON.stringify(doc),
+        type: MODULE_NAMES.COMPANY,
+        newData: doc,
         object: company,
-        description: `${company.primaryName} has been created`,
       },
       user,
     );
@@ -31,51 +31,33 @@ const companyMutations = {
   /**
    * Updates a company
    */
-  async companiesEdit(_root, { _id, ...doc }: ICompaniesEdit, { user }: { user: IUserDocument }) {
-    const company = await Companies.findOne({ _id });
+  async companiesEdit(_root, { _id, ...doc }: ICompaniesEdit, { user }: IContext) {
+    const company = await Companies.getCompany(_id);
     const updated = await Companies.updateCompany(_id, doc);
 
-    if (company) {
-      await putUpdateLog(
-        {
-          type: 'company',
-          object: company,
-          newData: JSON.stringify(doc),
-          description: `${company.primaryName} has been updated`,
-        },
-        user,
-      );
-    }
+    await putUpdateLog(
+      {
+        type: MODULE_NAMES.COMPANY,
+        object: company,
+        newData: doc,
+        updatedDocument: updated,
+      },
+      user,
+    );
 
     return updated;
   },
 
   /**
-   * Update company Customers
+   * Removes companies
    */
-  async companiesEditCustomers(_root, { _id, customerIds }: { _id: string; customerIds: string[] }) {
-    return Companies.updateCustomers(_id, customerIds);
-  },
+  async companiesRemove(_root, { companyIds }: { companyIds: string[] }, { user }: IContext) {
+    const companies = await Companies.find({ _id: { $in: companyIds } }).lean();
 
-  /**
-   * Remove companies
-   */
-  async companiesRemove(_root, { companyIds }: { companyIds: string[] }, { user }: { user: IUserDocument }) {
-    for (const companyId of companyIds) {
-      const company = await Companies.findOne({ _id: companyId });
-      // Removing every company and modules associated with
-      const removed = await Companies.removeCompany(companyId);
+    await Companies.removeCompanies(companyIds);
 
-      if (company && removed) {
-        await putDeleteLog(
-          {
-            type: 'company',
-            object: company,
-            description: `${company.primaryName} has been removed`,
-          },
-          user,
-        );
-      }
+    for (const company of companies) {
+      await putDeleteLog({ type: MODULE_NAMES.COMPANY, object: company }, user);
     }
 
     return companyIds;
@@ -91,7 +73,6 @@ const companyMutations = {
 
 checkPermission(companyMutations, 'companiesAdd', 'companiesAdd');
 checkPermission(companyMutations, 'companiesEdit', 'companiesEdit');
-checkPermission(companyMutations, 'companiesEditCustomers', 'companiesEditCustomers');
 checkPermission(companyMutations, 'companiesRemove', 'companiesRemove');
 checkPermission(companyMutations, 'companiesMerge', 'companiesMerge');
 

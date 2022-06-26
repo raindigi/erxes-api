@@ -29,7 +29,7 @@ import {
  * Return filterSelector
  * @param args
  */
-export const getFilterSelector = (args: IListArgs): any => {
+export const getFilterSelector = (args: IListArgs): { [key: string]: any } => {
   const selector: IFilterSelector = { integration: {} };
   const { startDate, endDate, integrationIds, brandIds } = args;
   const { start, end } = fixDates(startDate, endDate);
@@ -108,7 +108,7 @@ export const getConversationSelector = async (
   fieldName: string = 'createdAt',
 ): Promise<any> => {
   if (Object.keys(filterSelector.integration).length > 0) {
-    const integrationIds = await Integrations.find(filterSelector.integration).select('_id');
+    const integrationIds = await Integrations.findIntegrations(filterSelector.integration).select('_id');
     conversationSelector.integrationId = { $in: integrationIds.map(row => row._id) };
   }
 
@@ -451,10 +451,10 @@ export const generateResponseData = async (
 
   const teamMembers: any = [];
 
-  const userIds = _.uniq(_.pluck(responseData, 'userId'));
+  const userIds = _.uniq(_.pluck(responseData, 'userId')) as string[];
 
   for (const userId of userIds) {
-    const { responseTime, count, summaries } = responseUserData[userId];
+    const { responseTime, count, summaries } = responseUserData[userId || ''];
 
     // Average response time for users.
     const avgResTime = Math.floor(responseTime / count);
@@ -462,7 +462,7 @@ export const generateResponseData = async (
     // preparing each team member's chart data
     teamMembers.push({
       data: await generateUserChartData({
-        userId,
+        userId: userId || '',
         userMessages: responseData.filter(message => userId === message.userId),
       }),
       time: avgResTime,
@@ -547,7 +547,7 @@ export const getConversationSelectorToMsg = async (
   }
 
   if (Object.keys(filterSelector.integration).length > 0) {
-    const integrationIdsList = await Integrations.find(filterSelector.integration).select('_id');
+    const integrationIdsList = await Integrations.findIntegrations(filterSelector.integration).select('_id');
     conversationSelector.integrationId = { $in: integrationIdsList.map(row => row._id) };
   }
   return { ...conversationSelector };

@@ -1,37 +1,55 @@
 import { Model, model } from 'mongoose';
 import { ActivityLogs } from '.';
-import { changeCompany, changeCustomer, updateOrder, watchItem } from './boardUtils';
-import { IOrderInput } from './definitions/boards';
-import { ITask, ITaskDocument, taskSchema } from './definitions/tasks';
+import { destroyBoardItemRelations, fillSearchTextItem, watchItem } from './boardUtils';
+import { IItemCommonFields as ITask } from './definitions/boards';
+import { ACTIVITY_CONTENT_TYPES } from './definitions/constants';
+import { ITaskDocument, taskSchema } from './definitions/tasks';
 
 export interface ITaskModel extends Model<ITaskDocument> {
   createTask(doc: ITask): Promise<ITaskDocument>;
+  getTask(_id: string): Promise<ITaskDocument>;
   updateTask(_id: string, doc: ITask): Promise<ITaskDocument>;
-  updateOrder(stageId: string, orders: IOrderInput[]): Promise<ITaskDocument[]>;
-  removeTask(_id: string): void;
   watchTask(_id: string, isAdd: boolean, userId: string): void;
-  changeCustomer(newCustomerId: string, oldCustomerIds: string[]): Promise<ITaskDocument>;
-  changeCompany(newCompanyId: string, oldCompanyIds: string[]): Promise<ITaskDocument>;
+  removeTasks(_ids: string[]): Promise<{ n: number; ok: number }>;
+  updateTimeTracking(_id: string, status: string, timeSpent: number, startDate: string): Promise<ITaskDocument>;
 }
 
 export const loadTaskClass = () => {
   class Task {
     /**
+     * Retreives Task
+     */
+    public static async getTask(_id: string) {
+      const task = await Tasks.findOne({ _id });
+
+      if (!task) {
+        throw new Error('Task not found');
+      }
+
+      return task;
+    }
+
+    /**
      * Create a Task
      */
     public static async createTask(doc: ITask) {
-      const tasksCount = await Tasks.find({
-        stageId: doc.stageId,
-      }).countDocuments();
+      if (doc.sourceConversationId) {
+        const convertedTask = await Tasks.findOne({ sourceConversationId: doc.sourceConversationId });
+
+        if (convertedTask) {
+          throw new Error('Already converted a task');
+        }
+      }
 
       const task = await Tasks.create({
         ...doc,
-        order: tasksCount,
+        createdAt: new Date(),
         modifiedAt: new Date(),
+        searchText: fillSearchTextItem(doc),
       });
 
       // create log
-      await ActivityLogs.createTaskLog(task);
+      await ActivityLogs.createBoardItemLog({ item: task, contentType: 'task' });
 
       return task;
     }
@@ -40,29 +58,11 @@ export const loadTaskClass = () => {
      * Update Task
      */
     public static async updateTask(_id: string, doc: ITask) {
-      await Tasks.updateOne({ _id }, { $set: doc });
+      const searchText = fillSearchTextItem(doc, await Tasks.getTask(_id));
+
+      await Tasks.updateOne({ _id }, { $set: doc, searchText });
 
       return Tasks.findOne({ _id });
-    }
-
-    /*
-     * Update given Tasks orders
-     */
-    public static async updateOrder(stageId: string, orders: IOrderInput[]) {
-      return updateOrder(Tasks, orders, stageId);
-    }
-
-    /**
-     * Remove Task
-     */
-    public static async removeTask(_id: string) {
-      const task = await Tasks.findOne({ _id });
-
-      if (!task) {
-        throw new Error('Task not found');
-      }
-
-      return task.remove();
     }
 
     /**
@@ -72,18 +72,25 @@ export const loadTaskClass = () => {
       return watchItem(Tasks, _id, isAdd, userId);
     }
 
-    /**
-     * Change customer
-     */
-    public static async changeCustomer(newCustomerId: string, oldCustomerIds: string[]) {
-      return changeCustomer(Tasks, newCustomerId, oldCustomerIds);
+    public static async removeTasks(_ids: string[]) {
+      // completely remove all related things
+      for (const _id of _ids) {
+        await destroyBoardItemRelations(_id, ACTIVITY_CONTENT_TYPES.TASK);
+      }
+
+      return Tasks.deleteMany({ _id: { $in: _ids } });
     }
 
-    /**
-     * Change company
-     */
-    public static async changeCompany(newCompanyId: string, oldCompanyIds: string[]) {
-      return changeCompany(Tasks, newCompanyId, oldCompanyIds);
+    public static async updateTimeTracking(_id: string, status: string, timeSpent: number, startDate?: string) {
+      const doc: { status: string; timeSpent: number; startDate?: string } = { status, timeSpent };
+
+      if (startDate) {
+        doc.startDate = startDate;
+      }
+
+      await Tasks.updateOne({ _id }, { $set: { timeTrack: doc } });
+
+      return Tasks.findOne({ _id }).lean();
     }
   }
 

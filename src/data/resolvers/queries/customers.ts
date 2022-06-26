@@ -1,85 +1,38 @@
-import { Brands, Customers, Forms, Segments, Tags } from '../../../db/models';
-import { ACTIVITY_CONTENT_TYPES, TAG_TYPES } from '../../../db/models/definitions/constants';
-import { ISegment } from '../../../db/models/definitions/segments';
-import { COC_LEAD_STATUS_TYPES, COC_LIFECYCLE_STATE_TYPES, INTEGRATION_KIND_CHOICES } from '../../constants';
-import { Builder as BuildQuery, IListArgs, sortBuilder } from '../../modules/coc/customers';
-import QueryBuilder from '../../modules/segments/queryBuilder';
+import { Customers, Forms } from '../../../db/models';
+import { KIND_CHOICES, TAG_TYPES } from '../../../db/models/definitions/constants';
+import { Builder as BuildQuery, IListArgs } from '../../modules/coc/customers';
+import { countByBrand, countByLeadStatus, countBySegment, countByTag, ICountBy } from '../../modules/coc/utils';
 import { checkPermission, moduleRequireLogin } from '../../permissions/wrappers';
-import { paginate } from '../../utils';
-
-interface ICountBy {
-  [index: string]: number;
-}
+import { IContext } from '../../types';
 
 interface ICountParams extends IListArgs {
   only: string;
 }
 
-const count = (query, mainQuery) => {
-  const findQuery = { $and: [mainQuery, query] };
-
-  return Customers.find(findQuery).countDocuments();
-};
-
-const countBySegment = async (qb: any, mainQuery: any): Promise<ICountBy> => {
+const countByIntegrationType = async (qb): Promise<ICountBy> => {
   const counts: ICountBy = {};
 
-  // Count customers by segments
-  const segments = await Segments.find({
-    contentType: ACTIVITY_CONTENT_TYPES.CUSTOMER,
-  });
+  for (const type of KIND_CHOICES.ALL) {
+    await qb.buildAllQueries();
+    await qb.integrationTypeFilter(type);
 
-  // Count customers by segment
-  for (const s of segments) {
-    try {
-      counts[s._id] = await count(await qb.segmentFilter(s._id), mainQuery);
-    } catch (e) {
-      // catch mongo error
-      if (e.name === 'CastError') {
-        counts[s._id] = 0;
-      } else {
-        throw new Error(e);
-      }
-    }
+    counts[type] = await qb.runQueries('count');
   }
 
   return counts;
 };
 
-const countByBrand = async (qb: any, mainQuery: any): Promise<ICountBy> => {
-  const counts: ICountBy = {};
-
-  // Count customers by brand
-  const brands = await Brands.find({});
-
-  for (const brand of brands) {
-    counts[brand._id] = await count(await qb.brandFilter(brand._id), mainQuery);
-  }
-
-  return counts;
-};
-
-const countByTag = async (qb: any, mainQuery: any): Promise<ICountBy> => {
-  const counts: ICountBy = {};
-
-  // Count customers by tag
-  const tags = await Tags.find({ type: TAG_TYPES.CUSTOMER });
-
-  for (const tag of tags) {
-    counts[tag._id] = await count(qb.tagFilter(tag._id), mainQuery);
-  }
-
-  return counts;
-};
-
-const countByForm = async (qb: any, mainQuery: any, params: any): Promise<ICountBy> => {
+const countByForm = async (qb: any, params: any): Promise<ICountBy> => {
   const counts: ICountBy = {};
 
   // Count customers by submitted form
   const forms = await Forms.find({});
 
   for (const form of forms) {
-    counts[form._id] = await count(await qb.formFilter(form._id, params.startDate, params.endDate), mainQuery);
+    await qb.buildAllQueries();
+    await qb.formFilter(form._id, params);
+
+    counts[form._id] = await qb.runQueries('count');
   }
 
   return counts;
@@ -89,28 +42,25 @@ const customerQueries = {
   /**
    * Customers list
    */
-  async customers(_root, params: IListArgs) {
-    const qb = new BuildQuery(params);
+  async customers(_root, params: IListArgs, { commonQuerySelector, commonQuerySelectorElk }: IContext) {
+    const qb = new BuildQuery(params, { commonQuerySelector, commonQuerySelectorElk });
 
     await qb.buildAllQueries();
 
-    const sort = sortBuilder(params);
+    const { list } = await qb.runQueries();
 
-    return paginate(Customers.find(qb.mainQuery()).sort(sort), params);
+    return list;
   },
 
   /**
    * Customers for only main list
    */
-  async customersMain(_root, params: IListArgs) {
-    const qb = new BuildQuery(params);
+  async customersMain(_root, params: IListArgs, { commonQuerySelector, commonQuerySelectorElk }: IContext) {
+    const qb = new BuildQuery(params, { commonQuerySelector, commonQuerySelectorElk });
 
     await qb.buildAllQueries();
 
-    const sort = sortBuilder(params);
-
-    const list = await paginate(Customers.find(qb.mainQuery()).sort(sort), params);
-    const totalCount = await Customers.find(qb.mainQuery()).countDocuments();
+    const { list, totalCount } = await qb.runQueries();
 
     return { list, totalCount };
   },
@@ -118,97 +68,47 @@ const customerQueries = {
   /**
    * Group customer counts by brands, segments, integrations, tags
    */
-  async customerCounts(_root, params: ICountParams) {
-    const { only } = params;
+  async customerCounts(_root, params: ICountParams, { commonQuerySelector, commonQuerySelectorElk }: IContext) {
+    const { only, type } = params;
 
     const counts = {
       bySegment: {},
       byBrand: {},
       byIntegrationType: {},
       byTag: {},
-      byFakeSegment: 0,
       byForm: {},
       byLeadStatus: {},
-      byLifecycleState: {},
     };
 
-    const qb = new BuildQuery(params);
-
-    await qb.buildAllQueries();
-
-    let mainQuery = qb.mainQuery();
-
-    // if passed at least one filter other than perPage
-    // then find all filtered customers then add subsequent filter to it
-    if (Object.keys(params).length > 1) {
-      const customers = await Customers.find(qb.mainQuery(), { _id: 1 });
-      const customerIds = customers.map(customer => customer._id);
-
-      mainQuery = { _id: { $in: customerIds } };
-    }
+    const qb = new BuildQuery(params, { commonQuerySelector, commonQuerySelectorElk });
 
     switch (only) {
       case 'bySegment':
-        counts.bySegment = await countBySegment(qb, mainQuery);
+        counts.bySegment = await countBySegment(type || 'customer', qb);
         break;
 
       case 'byBrand':
-        counts.byBrand = await countByBrand(qb, mainQuery);
+        counts.byBrand = await countByBrand(qb);
         break;
 
       case 'byTag':
-        counts.byTag = await countByTag(qb, mainQuery);
+        counts.byTag = await countByTag(TAG_TYPES.CUSTOMER, qb);
         break;
 
       case 'byForm':
-        counts.byForm = await countByForm(qb, mainQuery, params);
-        break;
-      case 'byLeadStatus':
-        {
-          for (const status of COC_LEAD_STATUS_TYPES) {
-            counts.byLeadStatus[status] = await count(qb.leadStatusFilter(status), mainQuery);
-          }
-        }
+        counts.byForm = await countByForm(qb, params);
         break;
 
-      case 'byLifecycleState':
-        {
-          for (const state of COC_LIFECYCLE_STATE_TYPES) {
-            counts.byLifecycleState[state] = await count(qb.lifecycleStateFilter(state), mainQuery);
-          }
-        }
+      case 'byLeadStatus':
+        counts.byLeadStatus = await countByLeadStatus(qb);
         break;
 
       case 'byIntegrationType':
-        {
-          for (const kind of INTEGRATION_KIND_CHOICES.ALL) {
-            counts.byIntegrationType[kind] = await count(await qb.integrationTypeFilter(kind), mainQuery);
-          }
-        }
+        counts.byIntegrationType = await countByIntegrationType(qb);
         break;
     }
 
-    // Count customers by fake segment
-    if (params.byFakeSegment) {
-      counts.byFakeSegment = await count(await QueryBuilder.segments(params.byFakeSegment), mainQuery);
-    }
-
     return counts;
-  },
-
-  /**
-   * Publishes customers list for the preview
-   * when creating/editing a customer segment
-   */
-  async customerListForSegmentPreview(_root, { segment, limit }: { segment: ISegment; limit: number }) {
-    const headSegment = await Segments.findOne({ _id: segment.subOf });
-
-    const query = await QueryBuilder.segments(segment, headSegment);
-    const sort = { 'messengerData.lastSeenAt': -1 };
-
-    return Customers.find(query)
-      .sort(sort)
-      .limit(limit);
   },
 
   /**

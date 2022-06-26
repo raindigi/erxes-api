@@ -25,6 +25,7 @@ export const types = `
     name: String!
     description: String!
     memberIds: [String]
+    members: [User]
   }
 `;
 
@@ -32,7 +33,8 @@ const commonParams = `
   module: String,
   action: String,
   userId: String,
-  groupId: String
+  groupId: String,
+  allowed: Boolean
 `;
 
 const commonUserGroupParams = `
@@ -61,5 +63,6 @@ export const mutations = `
   permissionsRemove(ids: [String]!): JSON
   usersGroupsAdd(${commonUserGroupParams}): UsersGroup
   usersGroupsEdit(_id: String!, ${commonUserGroupParams}): UsersGroup
-  usersGroupsRemove(_id: String!): JSON 
+  usersGroupsRemove(_id: String!): JSON
+  usersGroupsCopy(_id: String!, memberIds: [String]): UsersGroup
 `;

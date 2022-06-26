@@ -1,29 +1,11 @@
-const commonTypes = `
-  order: Int
-  createdAt: Date
-`;
+import { commonDragParams, commonMutationParams, commonTypes, conformityQueryFields, copyParams } from './common';
 
 export const types = `
   type Ticket {
     _id: String!
-    name: String!
-    stageId: String
-    boardId: String
-    companyIds: [String]
-    customerIds: [String]
-    assignedUserIds: [String]
-    closeDate: Date
-    description: String
-    priority: String
     source: String
     companies: [Company]
     customers: [Customer]
-    assignedUsers: [User]
-    isWatched: Boolean
-    stage: Stage
-    pipeline: Pipeline
-    modifiedAt: Date
-    modifiedBy: String
     ${commonTypes}
   }
 `;
@@ -39,34 +21,29 @@ export const queries = `
     skip: Int
     search: String
     assignedUserIds: [String]
-    nextDay: String
-    nextWeek: String
-    nextMonth: String
-    noCloseDate: String
-    overdue: String
+    closeDateType: String
     priority: [String]
     source: [String]
+    labelIds: [String]
+    sortField: String
+    sortDirection: Int
+    userIds: [String]
+    ${conformityQueryFields}
   ): [Ticket]
+  archivedTickets(pipelineId: String!, search: String, page: Int, perPage: Int): [Ticket]
+  archivedTicketsCount(pipelineId: String!, search: String): Int
 `;
 
-const commonParams = `
-  name: String!,
-  stageId: String,
-  assignedUserIds: [String],
-  companyIds: [String],
-  customerIds: [String],
-  closeDate: Date,
-  description: String,
-  order: Int,
-  priority: String,
-  source: String
+const ticketMutationParams = `
+  source: String,
 `;
 
 export const mutations = `
-  ticketsAdd(${commonParams}): Ticket
-  ticketsEdit(_id: String!, ${commonParams}): Ticket
-  ticketsChange( _id: String!, destinationStageId: String): Ticket
-  ticketsUpdateOrder(stageId: String!, orders: [OrderItem]): [Ticket]
+  ticketsAdd(name: String!, ${copyParams}, ${ticketMutationParams}, ${commonMutationParams}): Ticket
+  ticketsEdit(_id: String!, name: String, ${ticketMutationParams}, ${commonMutationParams}): Ticket
+  ticketsChange(${commonDragParams}): Ticket
   ticketsRemove(_id: String!): Ticket
   ticketsWatch(_id: String, isAdd: Boolean): Ticket
+  ticketsCopy(_id: String!, proccessId: String): Ticket
+  ticketsArchive(stageId: String!, proccessId: String): String
 `;

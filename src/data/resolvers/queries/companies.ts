@@ -1,89 +1,37 @@
-import { Brands, Companies, Segments, Tags } from '../../../db/models';
-import { ACTIVITY_CONTENT_TYPES, TAG_TYPES } from '../../../db/models/definitions/constants';
-import { COC_LEAD_STATUS_TYPES, COC_LIFECYCLE_STATE_TYPES } from '../../constants';
-import { brandFilter, filter, IListArgs, sortBuilder } from '../../modules/coc/companies';
-import QueryBuilder from '../../modules/segments/queryBuilder';
+import { Companies } from '../../../db/models';
+import { TAG_TYPES } from '../../../db/models/definitions/constants';
+import { Builder, IListArgs } from '../../modules/coc/companies';
+import { countByBrand, countBySegment, countByTag } from '../../modules/coc/utils';
 import { checkPermission, requireLogin } from '../../permissions/wrappers';
-import { paginate } from '../../utils';
+import { IContext } from '../../types';
 
 interface ICountArgs extends IListArgs {
   only?: string;
-  byFakeSegment: any;
 }
-
-interface ICountBy {
-  [index: string]: number;
-}
-
-const count = async (query: any, args: ICountArgs) => {
-  const selector = await filter(args);
-
-  const findQuery = { ...selector, ...query };
-
-  return Companies.find(findQuery).countDocuments();
-};
-
-const countBySegment = async (args: ICountArgs): Promise<ICountBy> => {
-  const counts = {};
-
-  // Count companies by segments =========
-  const segments = await Segments.find({
-    contentType: ACTIVITY_CONTENT_TYPES.COMPANY,
-  });
-
-  for (const s of segments) {
-    counts[s._id] = await count(await QueryBuilder.segments(s), args);
-  }
-
-  return counts;
-};
-
-const countByTags = async (args: ICountArgs): Promise<ICountBy> => {
-  const counts = {};
-
-  // Count companies by tag =========
-  const tags = await Tags.find({ type: TAG_TYPES.COMPANY });
-
-  for (const tag of tags) {
-    counts[tag._id] = await count({ tagIds: tag._id }, args);
-  }
-
-  return counts;
-};
-
-const countByBrands = async (args: ICountArgs): Promise<ICountBy> => {
-  const counts = {};
-
-  // Count companies by brand =========
-  const brands = await Brands.find({});
-
-  for (const brand of brands) {
-    counts[brand._id] = await count(await brandFilter(brand._id), args);
-  }
-
-  return counts;
-};
 
 const companyQueries = {
   /**
    * Companies list
    */
-  async companies(_root, params: IListArgs) {
-    const selector = await filter(params);
-    const sort = sortBuilder(params);
+  async companies(_root, params: IListArgs, { commonQuerySelector, commonQuerySelectorElk }: IContext) {
+    const qb = new Builder(params, { commonQuerySelector, commonQuerySelectorElk });
 
-    return paginate(Companies.find(selector), params).sort(sort);
+    await qb.buildAllQueries();
+
+    const { list } = await qb.runQueries();
+
+    return list;
   },
 
   /**
    * Companies for only main list
    */
-  async companiesMain(_root, params: IListArgs) {
-    const selector = await filter(params);
-    const sort = sortBuilder(params);
+  async companiesMain(_root, params: IListArgs, { commonQuerySelector, commonQuerySelectorElk }: IContext) {
+    const qb = new Builder(params, { commonQuerySelector, commonQuerySelectorElk });
 
-    const list = await paginate(Companies.find(selector).sort(sort), params);
-    const totalCount = await Companies.find(selector).countDocuments();
+    await qb.buildAllQueries();
+
+    const { list, totalCount } = await qb.runQueries();
 
     return { list, totalCount };
   },
@@ -91,49 +39,29 @@ const companyQueries = {
   /**
    * Group company counts by segments
    */
-  async companyCounts(_root, args: ICountArgs) {
+  async companyCounts(_root, args: ICountArgs, { commonQuerySelector, commonQuerySelectorElk }: IContext) {
     const counts = {
       bySegment: {},
-      byFakeSegment: 0,
       byTag: {},
       byBrand: {},
       byLeadStatus: {},
-      byLifecycleState: {},
     };
 
     const { only } = args;
 
+    const qb = new Builder(args, { commonQuerySelector, commonQuerySelectorElk });
+
     switch (only) {
       case 'byTag':
-        counts.byTag = await countByTags(args);
+        counts.byTag = await countByTag(TAG_TYPES.COMPANY, qb);
         break;
+
       case 'bySegment':
-        counts.bySegment = await countBySegment(args);
+        counts.bySegment = await countBySegment('company', qb);
         break;
       case 'byBrand':
-        counts.byBrand = await countByBrands(args);
+        counts.byBrand = await countByBrand(qb);
         break;
-      case 'byLeadStatus':
-        {
-          // Count companies by lead status ======
-          for (const status of COC_LEAD_STATUS_TYPES) {
-            counts.byLeadStatus[status] = await count({ leadStatus: status }, args);
-          }
-        }
-        break;
-      case 'byLifecycleState':
-        {
-          // Count companies by life cycle state =======
-          for (const state of COC_LIFECYCLE_STATE_TYPES) {
-            counts.byLifecycleState[state] = await count({ lifecycleState: state }, args);
-          }
-        }
-        break;
-    }
-
-    // Count companies by fake segment
-    if (args.byFakeSegment) {
-      counts.byFakeSegment = await count(await QueryBuilder.segments(args.byFakeSegment), args);
     }
 
     return counts;

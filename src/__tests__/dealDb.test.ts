@@ -1,15 +1,17 @@
 import {
   boardFactory,
-  companyFactory,
-  customerFactory,
+  conversationFactory,
   dealFactory,
   pipelineFactory,
+  pipelineLabelFactory,
   stageFactory,
   userFactory,
 } from '../db/factories';
 import { Boards, Deals, Pipelines, Stages } from '../db/models';
+import { getItem } from '../db/models/boardUtils';
 import { IBoardDocument, IPipelineDocument, IStageDocument } from '../db/models/definitions/boards';
 import { IDealDocument } from '../db/models/definitions/deals';
+import { IPipelineLabelDocument } from '../db/models/definitions/pipelineLabels';
 import { IUserDocument } from '../db/models/definitions/users';
 
 import './setup.ts';
@@ -20,14 +22,26 @@ describe('Test deals model', () => {
   let stage: IStageDocument;
   let deal: IDealDocument;
   let user: IUserDocument;
+  let label: IPipelineLabelDocument;
+  let secondUser: IUserDocument;
 
   beforeEach(async () => {
     // Creating test data
     board = await boardFactory();
     pipeline = await pipelineFactory({ boardId: board._id });
     stage = await stageFactory({ pipelineId: pipeline._id });
-    deal = await dealFactory({ stageId: stage._id });
     user = await userFactory({});
+    secondUser = await userFactory({});
+    label = await pipelineLabelFactory({});
+    deal = await dealFactory({
+      initialStageId: stage._id,
+      stageId: stage._id,
+      userId: user._id,
+      modifiedBy: user._id,
+      labelIds: [label._id],
+      assignedUserIds: [user._id],
+      watchedUserIds: [secondUser._id],
+    });
   });
 
   afterEach(async () => {
@@ -38,17 +52,62 @@ describe('Test deals model', () => {
     await Deals.deleteMany({});
   });
 
-  // Test deal
+  test('Get deal', async () => {
+    try {
+      await Deals.getDeal('fakeId');
+    } catch (e) {
+      expect(e.message).toBe('Deal not found');
+    }
+
+    const response = await Deals.getDeal(deal._id);
+
+    expect(response).toBeDefined();
+  });
+
+  test('Get item on deal', async () => {
+    try {
+      await getItem('deal', 'fakeId');
+    } catch (e) {
+      expect(e.message).toBe('deal not found');
+    }
+
+    const response = await getItem('deal', deal._id);
+
+    expect(response).toBeDefined();
+  });
+
   test('Create deal', async () => {
-    const createdDeal = await Deals.createDeal({
+    const args = {
       stageId: deal.stageId,
       userId: user._id,
-    });
+    };
+
+    const createdDeal = await Deals.createDeal(args);
 
     expect(createdDeal).toBeDefined();
     expect(createdDeal.stageId).toEqual(stage._id);
-    expect(createdDeal.createdAt).toEqual(deal.createdAt);
     expect(createdDeal.userId).toEqual(user._id);
+  });
+
+  test('Create deal Error(`Already converted a deal`)', async () => {
+    const conversation = await conversationFactory();
+
+    const args = {
+      stageId: deal.stageId,
+      userId: user._id,
+      sourceConversationId: conversation._id,
+    };
+
+    const createdDeal = await Deals.createDeal(args);
+
+    expect(createdDeal).toBeDefined();
+
+    // Already converted a deal
+    try {
+      await Deals.createDeal(args);
+    } catch (e) {
+      expect(e.message).toBe('Already converted a deal');
+    }
   });
 
   test('Update deal', async () => {
@@ -62,78 +121,26 @@ describe('Test deals model', () => {
     expect(updatedDeal.closeDate).toEqual(deal.closeDate);
   });
 
-  test('Update deal orders', async () => {
-    const dealToOrder = await dealFactory({});
+  test('Watch deal', async () => {
+    await Deals.watchDeal(deal._id, true, user._id);
 
-    const [updatedDeal, updatedDealToOrder] = await Deals.updateOrder(stage._id, [
-      { _id: deal._id, order: 9 },
-      { _id: dealToOrder._id, order: 3 },
-    ]);
+    const watchedDeal = await Deals.getDeal(deal._id);
 
-    expect(updatedDeal.stageId).toBe(stage._id);
-    expect(updatedDeal.order).toBe(3);
-    expect(updatedDealToOrder.order).toBe(9);
+    expect(watchedDeal.watchedUserIds).toContain(user._id);
+
+    // testing unwatch
+    await Deals.watchDeal(deal._id, false, user._id);
+
+    const unwatchedDeal = await Deals.getDeal(deal._id);
+
+    expect(unwatchedDeal.watchedUserIds).not.toContain(user._id);
   });
 
-  test('Remove deal', async () => {
-    const isDeleted = await Deals.removeDeal(deal.id);
+  test('Test removeDeals()', async () => {
+    await Deals.removeDeals([deal._id]);
 
-    expect(isDeleted).toBeTruthy();
-  });
+    const removed = await Deals.findOne({ _id: deal._id });
 
-  test('Remove deal not found', async () => {
-    expect.assertions(1);
-
-    const fakeDealId = 'fakeDealId';
-
-    try {
-      await Deals.removeDeal(fakeDealId);
-    } catch (e) {
-      expect(e.message).toEqual('Deal not found');
-    }
-  });
-
-  test('Deal change customer', async () => {
-    const newCustomer = await customerFactory({});
-
-    const customer1 = await customerFactory({});
-    const customer2 = await customerFactory({});
-    const dealObj = await dealFactory({
-      customerIds: [customer2._id, customer1._id],
-    });
-
-    await Deals.changeCustomer(newCustomer._id, [customer2._id, customer1._id]);
-
-    const result = await Deals.findOne({ _id: dealObj._id });
-
-    if (!result) {
-      throw new Error('Deal not found');
-    }
-
-    expect(result.customerIds).toContain(newCustomer._id);
-    expect(result.customerIds).not.toContain(customer1._id);
-    expect(result.customerIds).not.toContain(customer2._id);
-  });
-
-  test('Deal change company', async () => {
-    const newCompany = await companyFactory({});
-
-    const company1 = await companyFactory({});
-    const company2 = await companyFactory({});
-    const dealObj = await dealFactory({
-      companyIds: [company1._id, company2._id],
-    });
-
-    await Deals.changeCompany(newCompany._id, [company1._id, company2._id]);
-
-    const result = await Deals.findOne({ _id: dealObj._id });
-
-    if (!result) {
-      throw new Error('Deal not found');
-    }
-
-    expect(result.companyIds).toContain(newCompany._id);
-    expect(result.companyIds).not.toContain(company1._id);
-    expect(result.companyIds).not.toContain(company2._id);
+    expect(removed).toBe(null);
   });
 });

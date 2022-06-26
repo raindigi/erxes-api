@@ -1,20 +1,47 @@
 import * as AWS from 'aws-sdk';
-import * as EmailValidator from 'email-deep-validator';
 import * as fileType from 'file-type';
 import * as admin from 'firebase-admin';
 import * as fs from 'fs';
 import * as Handlebars from 'handlebars';
 import * as nodemailer from 'nodemailer';
+import * as path from 'path';
 import * as requestify from 'requestify';
+import * as strip from 'strip';
 import * as xlsxPopulate from 'xlsx-populate';
-import { Customers, Notifications, Users } from '../db/models';
-import { IUserDocument } from '../db/models/definitions/users';
+import { Configs, Customers, EmailDeliveries, Notifications, Users, Webhooks } from '../db/models';
+import { IBrandDocument } from '../db/models/definitions/brands';
+import { WEBHOOK_STATUS } from '../db/models/definitions/constants';
+import { ICustomer } from '../db/models/definitions/customers';
+import { EMAIL_DELIVERY_STATUS } from '../db/models/definitions/emailDeliveries';
+import { IUser, IUserDocument } from '../db/models/definitions/users';
+import { OnboardingHistories } from '../db/models/Robot';
 import { debugBase, debugEmail, debugExternalApi } from '../debuggers';
+import memoryStorage from '../inmemoryStorage';
+import { graphqlPubsub } from '../pubsub';
+import { fieldsCombinedByContentType } from './modules/fields/utils';
+
+export const uploadsFolderPath = path.join(__dirname, '../private/uploads');
+
+export const initFirebase = (code: string): void => {
+  if (code.length === 0) {
+    return;
+  }
+
+  const codeString = code.trim();
+
+  if (codeString[0] === '{' && codeString[codeString.length - 1] === '}') {
+    const serviceAccount = JSON.parse(codeString);
+
+    if (serviceAccount.private_key) {
+      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    }
+  }
+};
 
 /*
  * Check that given file is not harmful
  */
-export const checkFile = async file => {
+export const checkFile = async (file, source?: string) => {
   if (!file) {
     throw new Error('Invalid file');
   }
@@ -22,7 +49,7 @@ export const checkFile = async file => {
   const { size } = file;
 
   // 20mb
-  if (size > 20000000) {
+  if (size > 20 * 1024 * 1024) {
     return 'Too large file';
   }
 
@@ -32,23 +59,40 @@ export const checkFile = async file => {
   // determine file type using magic numbers
   const ft = fileType(buffer);
 
+  const unsupportedMimeTypes = ['text/csv', 'image/svg+xml', 'text/plain', 'application/vnd.ms-excel'];
+
+  const oldMsOfficeDocs = ['application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint'];
+
+  // allow csv, svg to be uploaded
+  if (!ft && unsupportedMimeTypes.includes(file.type)) {
+    return 'ok';
+  }
+
   if (!ft) {
-    return 'Invalid file';
+    return 'Invalid file type';
   }
 
   const { mime } = ft;
 
-  if (
-    ![
-      'image/png',
-      'image/jpeg',
-      'image/jpg',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/pdf',
-    ].includes(mime)
-  ) {
-    return 'Invalid file';
+  // allow old ms office docs to be uploaded
+  if (mime === 'application/x-msi' && oldMsOfficeDocs.includes(file.type)) {
+    return 'ok';
+  }
+
+  const defaultMimeTypes = [
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/pdf',
+    'image/gif',
+  ];
+
+  const UPLOAD_FILE_TYPES = await getConfig(source === 'widgets' ? 'WIDGETS_UPLOAD_FILE_TYPES' : 'UPLOAD_FILE_TYPES');
+
+  if (!((UPLOAD_FILE_TYPES && UPLOAD_FILE_TYPES.split(',')) || defaultMimeTypes).includes(mime)) {
+    return 'Invalid configured file type';
   }
 
   return 'ok';
@@ -57,29 +101,41 @@ export const checkFile = async file => {
 /**
  * Create AWS instance
  */
-const createAWS = () => {
-  const AWS_ACCESS_KEY_ID = getEnv({ name: 'AWS_ACCESS_KEY_ID' });
-  const AWS_SECRET_ACCESS_KEY = getEnv({ name: 'AWS_SECRET_ACCESS_KEY' });
-  const AWS_BUCKET = getEnv({ name: 'AWS_BUCKET' });
+const createAWS = async () => {
+  const AWS_ACCESS_KEY_ID = await getConfig('AWS_ACCESS_KEY_ID');
+  const AWS_SECRET_ACCESS_KEY = await getConfig('AWS_SECRET_ACCESS_KEY');
+  const AWS_BUCKET = await getConfig('AWS_BUCKET');
+  const AWS_COMPATIBLE_SERVICE_ENDPOINT = await getConfig('AWS_COMPATIBLE_SERVICE_ENDPOINT');
+  const AWS_FORCE_PATH_STYLE = await getConfig('AWS_FORCE_PATH_STYLE');
 
   if (!AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY || !AWS_BUCKET) {
     throw new Error('AWS credentials are not configured');
   }
 
-  // initialize s3
-  return new AWS.S3({
+  const options: { accessKeyId: string; secretAccessKey: string; endpoint?: string; s3ForcePathStyle?: boolean } = {
     accessKeyId: AWS_ACCESS_KEY_ID,
     secretAccessKey: AWS_SECRET_ACCESS_KEY,
-  });
+  };
+
+  if (AWS_FORCE_PATH_STYLE === 'true') {
+    options.s3ForcePathStyle = true;
+  }
+
+  if (AWS_COMPATIBLE_SERVICE_ENDPOINT) {
+    options.endpoint = AWS_COMPATIBLE_SERVICE_ENDPOINT;
+  }
+
+  // initialize s3
+  return new AWS.S3(options);
 };
 
 /**
  * Create Google Cloud Storage instance
  */
-const createGCS = () => {
-  const GOOGLE_APPLICATION_CREDENTIALS = getEnv({ name: 'GOOGLE_APPLICATION_CREDENTIALS' });
-  const GOOGLE_PROJECT_ID = getEnv({ name: 'GOOGLE_PROJECT_ID' });
-  const BUCKET = getEnv({ name: 'GOOGLE_CLOUD_STORAGE_BUCKET' });
+const createGCS = async () => {
+  const GOOGLE_APPLICATION_CREDENTIALS = await getConfig('GOOGLE_APPLICATION_CREDENTIALS');
+  const GOOGLE_PROJECT_ID = await getConfig('GOOGLE_PROJECT_ID');
+  const BUCKET = await getConfig('GOOGLE_CLOUD_STORAGE_BUCKET');
 
   if (!GOOGLE_PROJECT_ID || !GOOGLE_APPLICATION_CREDENTIALS || !BUCKET) {
     throw new Error('Google Cloud Storage credentials are not configured');
@@ -97,16 +153,19 @@ const createGCS = () => {
 /*
  * Save binary data to amazon s3
  */
-export const uploadFileAWS = async (file: { name: string; path: string }): Promise<string> => {
-  const AWS_BUCKET = getEnv({ name: 'AWS_BUCKET' });
-  const AWS_PREFIX = getEnv({ name: 'AWS_PREFIX', defaultValue: '' });
-  const IS_PUBLIC = getEnv({ name: 'FILE_SYSTEM_PUBLIC', defaultValue: 'true' });
+export const uploadFileAWS = async (
+  file: { name: string; path: string; type: string },
+  forcePrivate: boolean = false,
+): Promise<string> => {
+  const IS_PUBLIC = forcePrivate ? false : await getConfig('FILE_SYSTEM_PUBLIC', 'true');
+  const AWS_PREFIX = await getConfig('AWS_PREFIX');
+  const AWS_BUCKET = await getConfig('AWS_BUCKET');
 
   // initialize s3
-  const s3 = createAWS();
+  const s3 = await createAWS();
 
   // generate unique name
-  const fileName = `${AWS_PREFIX}${Math.random()}${file.name}`;
+  const fileName = `${AWS_PREFIX}${Math.random()}${file.name.replace(/ /g, '')}`;
 
   // read file
   const buffer = await fs.readFileSync(file.path);
@@ -115,6 +174,7 @@ export const uploadFileAWS = async (file: { name: string; path: string }): Promi
   const response: any = await new Promise((resolve, reject) => {
     s3.upload(
       {
+        ContentType: file.type,
         Bucket: AWS_BUCKET,
         Key: fileName,
         Body: buffer,
@@ -134,14 +194,61 @@ export const uploadFileAWS = async (file: { name: string; path: string }): Promi
 };
 
 /*
+ * Delete file from amazon s3
+ */
+export const deleteFileAWS = async (fileName: string) => {
+  const AWS_BUCKET = await getConfig('AWS_BUCKET');
+
+  const params = { Bucket: AWS_BUCKET, Key: fileName };
+
+  // initialize s3
+  const s3 = await createAWS();
+
+  return new Promise((resolve, reject) => {
+    s3.deleteObject(params, err => {
+      if (err) {
+        return reject(err);
+      }
+
+      return resolve('ok');
+    });
+  });
+};
+
+/*
+ * Save file to local disk
+ */
+export const uploadFileLocal = async (file: { name: string; path: string; type: string }): Promise<string> => {
+  const oldPath = file.path;
+
+  if (!fs.existsSync(uploadsFolderPath)) {
+    fs.mkdirSync(uploadsFolderPath);
+  }
+
+  const fileName = `${Math.random()}${file.name.replace(/ /g, '')}`;
+  const newPath = `${uploadsFolderPath}/${fileName}`;
+  const rawData = fs.readFileSync(oldPath);
+
+  return new Promise((resolve, reject) => {
+    fs.writeFile(newPath, rawData, err => {
+      if (err) {
+        return reject(err);
+      }
+
+      return resolve(fileName);
+    });
+  });
+};
+
+/*
  * Save file to google cloud storage
  */
 export const uploadFileGCS = async (file: { name: string; path: string; type: string }): Promise<string> => {
-  const BUCKET = getEnv({ name: 'GOOGLE_CLOUD_STORAGE_BUCKET' });
-  const IS_PUBLIC = getEnv({ name: 'FILE_SYSTEM_PUBLIC', defaultValue: 'true' });
+  const BUCKET = await getConfig('GOOGLE_CLOUD_STORAGE_BUCKET');
+  const IS_PUBLIC = await getConfig('FILE_SYSTEM_PUBLIC');
 
   // initialize GCS
-  const storage = createGCS();
+  const storage = await createGCS();
 
   // select bucket
   const bucket = storage.bucket(BUCKET);
@@ -175,15 +282,50 @@ export const uploadFileGCS = async (file: { name: string; path: string; type: st
   return IS_PUBLIC === 'true' ? metadata.mediaLink : name;
 };
 
+const deleteFileLocal = async (fileName: string) => {
+  return new Promise((resolve, reject) => {
+    fs.unlink(`${uploadsFolderPath}/${fileName}`, error => {
+      if (error) {
+        return reject(error);
+      }
+
+      return resolve('deleted');
+    });
+  });
+};
+
+const deleteFileGCS = async (fileName: string) => {
+  const BUCKET = await getConfig('GOOGLE_CLOUD_STORAGE_BUCKET');
+
+  // initialize GCS
+  const storage = await createGCS();
+
+  // select bucket
+  const bucket = storage.bucket(BUCKET);
+
+  return new Promise((resolve, reject) => {
+    bucket
+      .file(fileName)
+      .delete()
+      .then(err => {
+        if (err) {
+          return reject(err);
+        }
+
+        return resolve('ok');
+      });
+  });
+};
+
 /**
  * Read file from GCS, AWS
  */
 export const readFileRequest = async (key: string): Promise<any> => {
-  const UPLOAD_SERVICE_TYPE = getEnv({ name: 'UPLOAD_SERVICE_TYPE', defaultValue: 'AWS' });
+  const UPLOAD_SERVICE_TYPE = await getConfig('UPLOAD_SERVICE_TYPE', 'AWS');
 
   if (UPLOAD_SERVICE_TYPE === 'GCS') {
-    const GCS_BUCKET = getEnv({ name: 'GOOGLE_CLOUD_STORAGE_BUCKET' });
-    const storage = createGCS();
+    const GCS_BUCKET = await getConfig('GOOGLE_CLOUD_STORAGE_BUCKET');
+    const storage = await createGCS();
 
     const bucket = storage.bucket(GCS_BUCKET);
 
@@ -195,47 +337,88 @@ export const readFileRequest = async (key: string): Promise<any> => {
     return contents;
   }
 
-  const AWS_BUCKET = getEnv({ name: 'AWS_BUCKET' });
-  const s3 = createAWS();
+  if (UPLOAD_SERVICE_TYPE === 'AWS') {
+    const AWS_BUCKET = await getConfig('AWS_BUCKET');
+    const s3 = await createAWS();
 
-  return new Promise((resolve, reject) => {
-    s3.getObject(
-      {
-        Bucket: AWS_BUCKET,
-        Key: key,
-      },
-      (error, response) => {
+    return new Promise((resolve, reject) => {
+      s3.getObject(
+        {
+          Bucket: AWS_BUCKET,
+          Key: key,
+        },
+        (error, response) => {
+          if (error) {
+            return reject(error);
+          }
+
+          return resolve(response.Body);
+        },
+      );
+    });
+  }
+
+  if (UPLOAD_SERVICE_TYPE === 'local') {
+    return new Promise((resolve, reject) => {
+      fs.readFile(`${uploadsFolderPath}/${key}`, (error, response) => {
         if (error) {
           return reject(error);
         }
 
-        return resolve(response.Body);
-      },
-    );
-  });
+        return resolve(response);
+      });
+    });
+  }
 };
 
 /*
  * Save binary data to amazon s3
  */
-export const uploadFile = async (file, fromEditor = false): Promise<any> => {
-  const IS_PUBLIC = getEnv({ name: 'FILE_SYSTEM_PUBLIC', defaultValue: 'true' });
-  const DOMAIN = getEnv({ name: 'DOMAIN' });
-  const UPLOAD_SERVICE_TYPE = getEnv({ name: 'UPLOAD_SERVICE_TYPE', defaultValue: 'AWS' });
+export const uploadFile = async (apiUrl: string, file, fromEditor = false): Promise<any> => {
+  const IS_PUBLIC = await getConfig('FILE_SYSTEM_PUBLIC');
+  const UPLOAD_SERVICE_TYPE = await getConfig('UPLOAD_SERVICE_TYPE', 'AWS');
 
-  const nameOrLink = UPLOAD_SERVICE_TYPE === 'AWS' ? await uploadFileAWS(file) : await uploadFileGCS(file);
+  let nameOrLink = '';
+
+  if (UPLOAD_SERVICE_TYPE === 'AWS') {
+    nameOrLink = await uploadFileAWS(file);
+  }
+
+  if (UPLOAD_SERVICE_TYPE === 'GCS') {
+    nameOrLink = await uploadFileGCS(file);
+  }
+
+  if (UPLOAD_SERVICE_TYPE === 'local') {
+    nameOrLink = await uploadFileLocal(file);
+  }
 
   if (fromEditor) {
     const editorResult = { fileName: file.name, uploaded: 1, url: nameOrLink };
 
     if (IS_PUBLIC !== 'true') {
-      editorResult.url = `${DOMAIN}/read-file?key=${nameOrLink}`;
+      editorResult.url = `${apiUrl}/read-file?key=${nameOrLink}`;
     }
 
     return editorResult;
   }
 
   return nameOrLink;
+};
+
+export const deleteFile = async (fileName: string): Promise<any> => {
+  const UPLOAD_SERVICE_TYPE = await getConfig('UPLOAD_SERVICE_TYPE', 'AWS');
+
+  if (UPLOAD_SERVICE_TYPE === 'AWS') {
+    return deleteFileAWS(fileName);
+  }
+
+  if (UPLOAD_SERVICE_TYPE === 'GCS') {
+    return deleteFileGCS(fileName);
+  }
+
+  if (UPLOAD_SERVICE_TYPE === 'local') {
+    return deleteFileLocal(fileName);
+  }
 };
 
 /**
@@ -261,11 +444,11 @@ const applyTemplate = async (data: any, templateName: string) => {
 /**
  * Create default or ses transporter
  */
-export const createTransporter = ({ ses }) => {
+export const createTransporter = async ({ ses }) => {
   if (ses) {
-    const AWS_SES_ACCESS_KEY_ID = getEnv({ name: 'AWS_SES_ACCESS_KEY_ID' });
-    const AWS_SES_SECRET_ACCESS_KEY = getEnv({ name: 'AWS_SES_SECRET_ACCESS_KEY' });
-    const AWS_REGION = getEnv({ name: 'AWS_REGION' });
+    const AWS_SES_ACCESS_KEY_ID = await getConfig('AWS_SES_ACCESS_KEY_ID');
+    const AWS_SES_SECRET_ACCESS_KEY = await getConfig('AWS_SES_SECRET_ACCESS_KEY');
+    const AWS_REGION = await getConfig('AWS_REGION');
 
     AWS.config.update({
       region: AWS_REGION,
@@ -278,40 +461,150 @@ export const createTransporter = ({ ses }) => {
     });
   }
 
-  const MAIL_SERVICE = getEnv({ name: 'MAIL_SERVICE' });
-  const MAIL_PORT = getEnv({ name: 'MAIL_PORT' });
-  const MAIL_USER = getEnv({ name: 'MAIL_USER' });
-  const MAIL_PASS = getEnv({ name: 'MAIL_PASS' });
-  const MAIL_HOST = getEnv({ name: 'MAIL_HOST' });
+  const MAIL_SERVICE = await getConfig('MAIL_SERVICE');
+  const MAIL_PORT = await getConfig('MAIL_PORT');
+  const MAIL_USER = await getConfig('MAIL_USER');
+  const MAIL_PASS = await getConfig('MAIL_PASS');
+  const MAIL_HOST = await getConfig('MAIL_HOST');
+
+  let auth;
+
+  if (MAIL_USER && MAIL_PASS) {
+    auth = {
+      user: MAIL_USER,
+      pass: MAIL_PASS,
+    };
+  }
 
   return nodemailer.createTransport({
     service: MAIL_SERVICE,
     host: MAIL_HOST,
     port: MAIL_PORT,
-    auth: {
-      user: MAIL_USER,
-      pass: MAIL_PASS,
-    },
+    auth,
   });
+};
+
+export interface IEmailParams {
+  toEmails?: string[];
+  fromEmail?: string;
+  title?: string;
+  customHtml?: string;
+  customHtmlData?: any;
+  template?: { name?: string; data?: any };
+  modifier?: (data: any, email: string) => void;
+}
+
+interface IReplacer {
+  key: string;
+  value: string;
+}
+
+/**
+ * Replace editor dynamic content tags
+ */
+export const replaceEditorAttributes = async (args: {
+  content: string;
+  customer?: ICustomer;
+  user?: IUser;
+  customerFields?: string[];
+  brand?: IBrandDocument;
+}): Promise<{ replacers: IReplacer[]; replacedContent?: string; customerFields?: string[] }> => {
+  const { content, customer, user, brand } = args;
+
+  const replacers: IReplacer[] = [];
+
+  let replacedContent = content || '';
+  let customerFields = args.customerFields;
+
+  if (!customerFields || customerFields.length === 0) {
+    const possibleCustomerFields = await fieldsCombinedByContentType({
+      contentType: 'customer',
+    });
+
+    customerFields = ['firstName', 'lastName'];
+
+    for (const field of possibleCustomerFields) {
+      if (content.includes(`{{ customer.${field.name} }}`)) {
+        if (field.name.includes('trackedData')) {
+          customerFields.push('trackedData');
+          continue;
+        }
+
+        if (field.name.includes('customFieldsData')) {
+          customerFields.push('customFieldsData');
+          continue;
+        }
+
+        customerFields.push(field.name);
+      }
+    }
+  }
+
+  // replace customer fields
+  if (customer) {
+    replacers.push({
+      key: '{{ customer.name }}',
+      value: Customers.getCustomerName(customer),
+    });
+
+    for (const field of customerFields) {
+      if (field.includes('trackedData') || field.includes('customFieldsData')) {
+        const dbFieldName = field.includes('trackedData') ? 'trackedData' : 'customFieldsData';
+
+        for (const subField of customer[dbFieldName] || []) {
+          replacers.push({
+            key: `{{ customer.${dbFieldName}.${subField.field} }}`,
+            value: subField.value || '',
+          });
+        }
+
+        continue;
+      }
+
+      replacers.push({
+        key: `{{ customer.${field} }}`,
+        value: customer[field] || '',
+      });
+    }
+  }
+
+  // replace user fields
+  if (user) {
+    replacers.push({ key: '{{ user.email }}', value: user.email || '' });
+
+    if (user.details) {
+      replacers.push({ key: '{{ user.fullName }}', value: user.details.fullName || '' });
+      replacers.push({ key: '{{ user.position }}', value: user.details.position || '' });
+    }
+  }
+
+  // replace brand fields
+  if (brand) {
+    replacers.push({ key: '{{ brandName }}', value: brand.name || '' });
+  }
+
+  for (const replacer of replacers) {
+    const regex = new RegExp(replacer.key, 'gi');
+
+    replacedContent = replacedContent.replace(regex, replacer.value);
+  }
+
+  return { replacedContent, replacers, customerFields };
 };
 
 /**
  * Send email
  */
-export const sendEmail = async ({
-  toEmails,
-  fromEmail,
-  title,
-  template = {},
-}: {
-  toEmails?: string[];
-  fromEmail?: string;
-  title?: string;
-  template?: { name?: string; data?: any; isCustom?: boolean };
-}) => {
+export const sendEmail = async (params: IEmailParams) => {
+  const { toEmails = [], fromEmail, title, customHtml, customHtmlData, template = {}, modifier } = params;
+
   const NODE_ENV = getEnv({ name: 'NODE_ENV' });
-  const DEFAULT_EMAIL_SERVICE = getEnv({ name: 'DEFAULT_EMAIL_SERVICE', defaultValue: '' });
-  const COMPANY_EMAIL_FROM = getEnv({ name: 'COMPANY_EMAIL_FROM' });
+  const DEFAULT_EMAIL_SERVICE = await getConfig('DEFAULT_EMAIL_SERVICE', 'SES');
+  const COMPANY_EMAIL_FROM = await getConfig('COMPANY_EMAIL_FROM', '');
+  const AWS_SES_CONFIG_SET = await getConfig('AWS_SES_CONFIG_SET', '');
+  const AWS_ACCESS_KEY_ID = await getConfig('AWS_ACCESS_KEY_ID', '');
+  const AWS_SES_SECRET_ACCESS_KEY = await getConfig('AWS_SES_SECRET_ACCESS_KEY', '');
+  const MAIN_APP_DOMAIN = getEnv({ name: 'MAIN_APP_DOMAIN' });
 
   // do not send email it is running in test mode
   if (NODE_ENV === 'test') {
@@ -322,52 +615,95 @@ export const sendEmail = async ({
   let transporter;
 
   try {
-    transporter = createTransporter({ ses: DEFAULT_EMAIL_SERVICE === 'SES' });
+    transporter = await createTransporter({ ses: DEFAULT_EMAIL_SERVICE === 'SES' });
   } catch (e) {
     return debugEmail(e.message);
   }
 
-  const { isCustom, data, name } = template;
+  const { data = {}, name } = template;
 
-  // generate email content by given template
-  let html = await applyTemplate(data, name || '');
+  // for unsubscribe url
+  data.domain = MAIN_APP_DOMAIN;
 
-  if (!isCustom) {
-    html = await applyTemplate({ content: html }, 'base');
-  }
+  for (const toEmail of toEmails) {
+    if (modifier) {
+      modifier(data, toEmail);
+    }
 
-  return (toEmails || []).map(toEmail => {
-    const mailOptions = {
+    // generate email content by given template
+    let html = await applyTemplate(data, name || 'base');
+
+    if (customHtml) {
+      html = Handlebars.compile(customHtml)(customHtmlData || {});
+    }
+
+    const mailOptions: any = {
       from: fromEmail || COMPANY_EMAIL_FROM,
       to: toEmail,
       subject: title,
       html,
     };
 
+    let headers: { [key: string]: string } = {};
+
+    if (AWS_ACCESS_KEY_ID.length > 0 && AWS_SES_SECRET_ACCESS_KEY.length > 0) {
+      const emailDelivery = await EmailDeliveries.create({
+        kind: 'transaction',
+        to: toEmail,
+        from: fromEmail || COMPANY_EMAIL_FROM,
+        subject: title,
+        body: html,
+        status: EMAIL_DELIVERY_STATUS.PENDING,
+      });
+
+      headers = {
+        'X-SES-CONFIGURATION-SET': AWS_SES_CONFIG_SET || 'erxes',
+        EmailDeliveryId: emailDelivery._id,
+      };
+    } else {
+      headers['X-SES-CONFIGURATION-SET'] = 'erxes';
+    }
+
+    mailOptions.headers = headers;
+
     return transporter.sendMail(mailOptions, (error, info) => {
       debugEmail(error);
       debugEmail(info);
     });
-  });
+  }
 };
 
 /**
- * Send a notification
+ * Returns user's name or email
  */
-export const sendNotification = async ({
-  createdUser,
-  receivers,
-  ...doc
-}: {
-  createdUser?: string;
+export const getUserDetail = (user: IUser) => {
+  return (user.details && user.details.fullName) || user.email;
+};
+
+export interface ISendNotification {
+  createdUser: IUserDocument;
   receivers: string[];
   title: string;
   content: string;
   notifType: string;
   link: string;
-}) => {
+  action: string;
+  contentType: string;
+  contentTypeId: string;
+}
+
+/**
+ * Send a notification
+ */
+export const sendNotification = async (doc: ISendNotification) => {
+  const { createdUser, receivers, title, content, notifType, action, contentType, contentTypeId } = doc;
+  let link = doc.link;
+
+  // remove duplicated ids
+  const receiverIds = [...new Set(receivers)];
+
   // collecting emails
-  const recipients = await Users.find({ _id: { $in: receivers } });
+  const recipients = await Users.find({ _id: { $in: receiverIds }, isActive: true, doNotDisturb: { $ne: 'Yes' } });
 
   // collect recipient emails
   const toEmails: string[] = [];
@@ -379,29 +715,58 @@ export const sendNotification = async ({
   }
 
   // loop through receiver ids
-  for (const receiverId of receivers) {
+  for (const receiverId of receiverIds) {
     try {
       // send web and mobile notification
+      const notification = await Notifications.createNotification(
+        { link, title, content, notifType, receiver: receiverId, action, contentType, contentTypeId },
+        createdUser._id,
+      );
 
-      await Notifications.createNotification({ ...doc, receiver: receiverId }, createdUser);
+      graphqlPubsub.publish('notificationInserted', {
+        notificationInserted: {
+          _id: notification._id,
+          userId: receiverId,
+          title: notification.title,
+          content: notification.content,
+        },
+      });
     } catch (e) {
       // Any other error is serious
       if (e.message !== 'Configuration does not exist') {
         throw e;
       }
     }
-  }
+  } // end receiverIds loop
 
-  return sendEmail({
+  const MAIN_APP_DOMAIN = getEnv({ name: 'MAIN_APP_DOMAIN' });
+
+  link = `${MAIN_APP_DOMAIN}${link}`;
+
+  // for controlling email template data filling
+  const modifier = (data: any, email: string) => {
+    const user = recipients.find(item => item.email === email);
+
+    if (user) {
+      data.uid = user._id;
+    }
+  };
+
+  await sendEmail({
     toEmails,
     title: 'Notification',
     template: {
       name: 'notification',
       data: {
-        notification: doc,
+        notification: { ...doc, link },
+        action,
+        userName: getUserDetail(createdUser),
       },
     },
+    modifier,
   });
+
+  return true;
 };
 
 /**
@@ -427,24 +792,8 @@ interface IRequestParams {
   method?: string;
   headers?: { [key: string]: string };
   params?: { [key: string]: string };
-  body?: { [key: string]: string };
+  body?: { [key: string]: any };
   form?: { [key: string]: string };
-}
-
-export interface ILogQueryParams {
-  start?: string;
-  end?: string;
-  userId?: string;
-  action?: string;
-  page?: number;
-  perPage?: number;
-}
-
-interface ILogParams {
-  type: string;
-  newData?: string;
-  description?: string;
-  object: any;
 }
 
 /**
@@ -454,13 +803,6 @@ export const sendRequest = async (
   { url, method, headers, form, body, params }: IRequestParams,
   errorMessage?: string,
 ) => {
-  const NODE_ENV = getEnv({ name: 'NODE_ENV' });
-  const DOMAIN = getEnv({ name: 'DOMAIN' });
-
-  if (NODE_ENV === 'test') {
-    return;
-  }
-
   debugExternalApi(`
     Sending request to
     url: ${url}
@@ -472,7 +814,7 @@ export const sendRequest = async (
   try {
     const response = await requestify.request(url, {
       method,
-      headers: { 'Content-Type': 'application/json', origin: DOMAIN, ...(headers || {}) },
+      headers: { 'Content-Type': 'application/json', ...(headers || {}) },
       form,
       body,
       params,
@@ -487,169 +829,35 @@ export const sendRequest = async (
 
     return responseBody;
   } catch (e) {
-    if (e.code === 'ECONNREFUSED') {
-      debugExternalApi(errorMessage);
+    if (e.code === 'ECONNREFUSED' || e.code === 'ENOTFOUND') {
       throw new Error(errorMessage);
     } else {
-      debugExternalApi(`Error occurred : ${e.body}`);
-      throw new Error(e.body);
+      const message = e.body || e.message;
+      throw new Error(message);
     }
   }
 };
 
-/**
- * Send request to integrations api
- */
-export const fetchIntegrationApi = ({ path, method, body, params }: IRequestParams) => {
-  const INTEGRATIONS_API_DOMAIN = getEnv({ name: 'INTEGRATIONS_API_DOMAIN' });
+export const registerOnboardHistory = ({ type, user }: { type: string; user: IUserDocument }) =>
+  OnboardingHistories.getOrCreate({ type, user })
+    .then(({ status }) => {
+      if (status === 'created') {
+        graphqlPubsub.publish('onboardingChanged', {
+          onboardingChanged: { userId: user._id, type },
+        });
+      }
+    })
+    .catch(e => debugBase(e));
 
-  return sendRequest(
-    { url: `${INTEGRATIONS_API_DOMAIN}${path}`, method, body, params },
-    'Failed to connect integration api. Check INTEGRATIONS_API_DOMAIN env or integration api is not running',
-  );
-};
-
-/**
- * Send request to crons api
- */
-export const fetchCronsApi = ({ path, method, body, params }: IRequestParams) => {
-  const CRONS_API_DOMAIN = getEnv({ name: 'CRONS_API_DOMAIN' });
-
-  return sendRequest(
-    { url: `${CRONS_API_DOMAIN}${path}`, method, body, params },
-    'Failed to connect crons api. Check CRONS_API_DOMAIN env or crons api is not running',
-  );
-};
-
-/**
- * Send request to workers api
- */
-export const fetchWorkersApi = ({ path, method, body, params }: IRequestParams) => {
-  const WORKERS_API_DOMAIN = getEnv({ name: 'WORKERS_API_DOMAIN' });
-
-  return sendRequest(
-    { url: `${WORKERS_API_DOMAIN}${path}`, method, body, params },
-    'Failed to connect workers api. Check WORKERS_API_DOMAIN env or workers api is not running',
-  );
-};
-
-/**
- * Prepares a create log request to log server
- * @param params Log document params
- * @param user User information from mutation context
- */
-export const putCreateLog = (params: ILogParams, user: IUserDocument) => {
-  const doc = { ...params, action: 'create', object: JSON.stringify(params.object) };
-
-  return putLog(doc, user);
-};
-
-/**
- * Prepares a create log request to log server
- * @param params Log document params
- * @param user User information from mutation context
- */
-export const putUpdateLog = (params: ILogParams, user: IUserDocument) => {
-  const doc = { ...params, action: 'update', object: JSON.stringify(params.object) };
-
-  return putLog(doc, user);
-};
-
-/**
- * Prepares a create log request to log server
- * @param params Log document params
- * @param user User information from mutation context
- */
-export const putDeleteLog = (params: ILogParams, user: IUserDocument) => {
-  const doc = { ...params, action: 'delete', object: JSON.stringify(params.object) };
-
-  return putLog(doc, user);
-};
-
-/**
- * Sends a request to logs api
- * @param {Object} body Request
- * @param {Object} user User information from mutation context
- */
-const putLog = (body: ILogParams, user: IUserDocument) => {
-  const LOGS_DOMAIN = getEnv({ name: 'LOGS_API_DOMAIN' });
-
-  if (!LOGS_DOMAIN) {
-    return;
-  }
-
-  const doc = {
-    ...body,
-    createdBy: user._id,
-    unicode: user.username || user.email || user._id,
-  };
-
-  return sendRequest(
-    { url: `${LOGS_DOMAIN}/logs/create`, method: 'post', body: { params: JSON.stringify(doc) } },
-    'Failed to connect to logs api. Check whether LOGS_API_DOMAIN env is missing or logs api is not running',
-  );
-};
-
-/**
- * Sends a request to logs api
- * @param {Object} param0 Request
- */
-export const fetchLogs = (params: ILogQueryParams) => {
-  const LOGS_DOMAIN = getEnv({ name: 'LOGS_API_DOMAIN' });
-
-  if (!LOGS_DOMAIN) {
-    return {
-      logs: [],
-      totalCount: 0,
-    };
-  }
-
-  return sendRequest(
-    { url: `${LOGS_DOMAIN}/logs`, method: 'get', body: { params: JSON.stringify(params) } },
-    'Failed to connect to logs api. Check whether LOGS_API_DOMAIN env is missing or logs api is not running',
-  );
-};
-
-/**
- * Validates email using MX record resolver
- * @param email as String
- */
-export const validateEmail = async email => {
-  const NODE_ENV = getEnv({ name: 'NODE_ENV' });
-
-  if (NODE_ENV === 'test') {
-    return true;
-  }
-
-  const emailValidator = new EmailValidator();
-  const { validDomain, validMailbox } = await emailValidator.verify(email);
-
-  if (!validDomain) {
-    return false;
-  }
-
-  if (!validMailbox && validMailbox === null) {
-    return false;
-  }
-
-  return true;
-};
-
-export const authCookieOptions = () => {
+export const authCookieOptions = (secure: boolean) => {
   const oneDay = 1 * 24 * 3600 * 1000; // 1 day
 
   const cookieOptions = {
     httpOnly: true,
     expires: new Date(Date.now() + oneDay),
     maxAge: oneDay,
-    secure: false,
+    secure,
   };
-
-  const HTTPS = getEnv({ name: 'HTTPS', defaultValue: 'false' });
-
-  if (HTTPS === 'true') {
-    cookieOptions.secure = true;
-  }
 
   return cookieOptions;
 };
@@ -659,10 +867,6 @@ export const getEnv = ({ name, defaultValue }: { name: string; defaultValue?: st
 
   if (!value && typeof defaultValue !== 'undefined') {
     return defaultValue;
-  }
-
-  if (!value) {
-    debugBase(`Missing environment variable configuration for ${name}`);
   }
 
   return value || '';
@@ -680,11 +884,13 @@ export const sendMobileNotification = async ({
   title,
   body,
   customerId,
+  conversationId,
 }: {
   receivers: string[];
   customerId?: string;
   title: string;
   body: string;
+  conversationId: string;
 }): Promise<void> => {
   if (!admin.apps.length) {
     return;
@@ -704,16 +910,20 @@ export const sendMobileNotification = async ({
   if (tokens.length > 0) {
     // send notification
     for (const token of tokens) {
-      await transporter.send({ token, notification: { title, body } });
+      await transporter.send({ token, notification: { title, body }, data: { conversationId } });
     }
   }
 };
 
-export const paginate = (collection, params: { page?: number; perPage?: number }) => {
-  const { page = 0, perPage = 0 } = params || {};
+export const paginate = (collection, params: { ids?: string[]; page?: number; perPage?: number }) => {
+  const { page = 0, perPage = 0, ids } = params || { ids: null };
 
   const _page = Number(page || '1');
   const _limit = Number(perPage || '20');
+
+  if (ids) {
+    return collection;
+  }
 
   return collection.limit(_limit).skip((_page - 1) * _limit);
 };
@@ -747,19 +957,220 @@ export const getToday = (date: Date): Date => {
 
 export const getNextMonth = (date: Date): { start: number; end: number } => {
   const today = getToday(date);
+  const currentMonth = new Date().getMonth();
 
-  const month = (new Date().getMonth() + 1) % 12;
+  if (currentMonth === 11) {
+    today.setFullYear(today.getFullYear() + 1);
+  }
+
+  const month = (currentMonth + 1) % 12;
   const start = today.setMonth(month, 1);
   const end = today.setMonth(month + 1, 0);
 
   return { start, end };
 };
 
+/**
+ * Send to webhook
+ */
+
+export const sendToWebhook = async (action: string, type: string, params: any) => {
+  const webhooks = await Webhooks.find({ 'actions.action': action, 'actions.type': type });
+
+  if (!webhooks) {
+    return;
+  }
+
+  let data = params;
+  for (const webhook of webhooks) {
+    if (!webhook.url || webhook.url.length === 0) {
+      continue;
+    }
+
+    if (action === 'delete') {
+      data = { type, object: { _id: params.object._id } };
+    }
+
+    sendRequest({
+      url: webhook.url,
+      headers: {
+        'Erxes-token': webhook.token || '',
+      },
+      method: 'post',
+      body: { data: JSON.stringify(data), action, type },
+    })
+      .then(async () => {
+        await Webhooks.updateStatus(webhook._id, WEBHOOK_STATUS.AVAILABLE);
+      })
+      .catch(async () => {
+        await Webhooks.updateStatus(webhook._id, WEBHOOK_STATUS.UNAVAILABLE);
+      });
+  }
+};
+
 export default {
   sendEmail,
-  validateEmail,
   sendNotification,
   sendMobileNotification,
   readFile,
   createTransporter,
+  sendToWebhook,
+};
+
+export const cleanHtml = (content?: string) => strip(content || '').substring(0, 100);
+
+export const validSearchText = (values: string[]) => {
+  const value = values.join(' ');
+
+  if (value.length < 512) {
+    return value;
+  }
+
+  return value.substring(0, 511);
+};
+
+const stringToRegex = (value: string) => {
+  const specialChars = [...'{}[]\\^$.|?*+()'];
+
+  const result = [...value].map(char => (specialChars.includes(char) ? '.?\\' + char : '.?' + char));
+
+  return '.*' + result.join('').substring(2) + '.*';
+};
+
+export const regexSearchText = (searchValue: string, searchKey = 'searchText') => {
+  const result: any[] = [];
+
+  searchValue = searchValue.replace(/\s\s+/g, ' ');
+
+  const words = searchValue.split(' ');
+
+  for (const word of words) {
+    result.push({ [searchKey]: new RegExp(`${stringToRegex(word)}`, 'mui') });
+  }
+
+  return { $and: result };
+};
+
+/**
+ * Check user ids whether its added or removed from array of ids
+ */
+export const checkUserIds = (oldUserIds: string[] = [], newUserIds: string[] = []) => {
+  const removedUserIds = oldUserIds.filter(e => !newUserIds.includes(e));
+
+  const addedUserIds = newUserIds.filter(e => !oldUserIds.includes(e));
+
+  return { addedUserIds, removedUserIds };
+};
+
+/*
+ * Handle engage unsubscribe request
+ */
+export const handleUnsubscription = async (query: { cid: string; uid: string }) => {
+  const { cid, uid } = query;
+
+  if (cid) {
+    await Customers.updateOne({ _id: cid }, { $set: { doNotDisturb: 'Yes' } });
+  }
+
+  if (uid) {
+    await Users.updateOne({ _id: uid }, { $set: { doNotDisturb: 'Yes' } });
+  }
+};
+
+export const getConfigs = async () => {
+  const configsCache = await memoryStorage().get('configs_erxes_api');
+
+  if (configsCache && configsCache !== '{}') {
+    return JSON.parse(configsCache);
+  }
+
+  const configsMap = {};
+  const configs = await Configs.find({});
+
+  for (const config of configs) {
+    configsMap[config.code] = config.value;
+  }
+
+  memoryStorage().set('configs_erxes_api', JSON.stringify(configsMap));
+
+  return configsMap;
+};
+
+export const getConfig = async (code, defaultValue?) => {
+  const configs = await getConfigs();
+
+  if (!configs[code]) {
+    return defaultValue;
+  }
+
+  return configs[code];
+};
+
+export const resetConfigsCache = () => {
+  memoryStorage().set('configs_erxes_api', '');
+};
+
+export const frontendEnv = ({ name, req, requestInfo }: { name: string; req?: any; requestInfo?: any }): string => {
+  const cookies = req ? req.cookies : requestInfo.cookies;
+  const keys = Object.keys(cookies);
+
+  const envs: { [key: string]: string } = {};
+
+  for (const key of keys) {
+    envs[key.replace('REACT_APP_', '')] = cookies[key];
+  }
+
+  return envs[name];
+};
+
+export const getSubServiceDomain = ({ name }: { name: string }): string => {
+  const MAIN_APP_DOMAIN = getEnv({ name: 'MAIN_APP_DOMAIN' });
+
+  const defaultMappings = {
+    API_DOMAIN: `${MAIN_APP_DOMAIN}/api`,
+    WIDGETS_DOMAIN: `${MAIN_APP_DOMAIN}/widgets`,
+    INTEGRATIONS_API_DOMAIN: `${MAIN_APP_DOMAIN}/integrations`,
+    LOGS_API_DOMAIN: `${MAIN_APP_DOMAIN}/logs`,
+    ENGAGES_API_DOMAIN: `${MAIN_APP_DOMAIN}/engages`,
+    VERIFIER_API_DOMAIN: `${MAIN_APP_DOMAIN}/verifier`,
+  };
+
+  const domain = getEnv({ name });
+
+  if (domain) {
+    return domain;
+  }
+
+  return defaultMappings[name];
+};
+
+export const chunkArray = (myArray, chunkSize: number) => {
+  let index = 0;
+
+  const arrayLength = myArray.length;
+  const tempArray: any[] = [];
+
+  for (index = 0; index < arrayLength; index += chunkSize) {
+    const myChunk = myArray.slice(index, index + chunkSize);
+
+    // Do something if you want with the group
+    tempArray.push(myChunk);
+  }
+
+  return tempArray;
+};
+
+/**
+ * Create s3 stream for excel file
+ */
+export const s3Stream = async (key: string, errorCallback: (error: any) => void): Promise<any> => {
+  const AWS_BUCKET = await getConfig('AWS_BUCKET');
+
+  const s3 = await createAWS();
+
+  const stream = s3.getObject({ Bucket: AWS_BUCKET, Key: key }).createReadStream();
+
+  stream.on('error', errorCallback);
+
+  return stream;
 };

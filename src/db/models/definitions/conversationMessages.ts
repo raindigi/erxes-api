@@ -1,5 +1,6 @@
 import { Document, Schema } from 'mongoose';
-import { field } from '../utils';
+import { MESSAGE_TYPES } from './constants';
+import { field } from './utils';
 
 interface IEngageDataRules {
   kind: string;
@@ -26,6 +27,7 @@ interface IEngageDataDocument extends IEngageData, Document {
 
 export interface IMessage {
   content?: string;
+  createdAt?: Date;
   attachments?: any;
   mentionedUserIds?: string[];
   conversationId: string;
@@ -35,8 +37,10 @@ export interface IMessage {
   fromBot?: boolean;
   isCustomerRead?: boolean;
   formWidgetData?: any;
+  botData?: any;
   messengerAppData?: any;
   engageData?: IEngageData;
+  contentType?: string;
 }
 
 export interface IMessageDocument extends IMessage, Document {
@@ -67,6 +71,7 @@ const engageDataRuleSchema = new Schema(
 
 const engageDataSchema = new Schema(
   {
+    engageKind: field({ type: String }),
     messageId: field({ type: String }),
     brandId: field({ type: String }),
     content: field({ type: String }),
@@ -80,7 +85,7 @@ const engageDataSchema = new Schema(
 
 export const messageSchema = new Schema({
   _id: field({ pkey: true }),
-  content: field({ type: String }),
+  content: field({ type: String, optional: true }),
   attachments: [attachmentSchema],
   mentionedUserIds: field({ type: [String] }),
   conversationId: field({ type: String, index: true }),
@@ -90,7 +95,13 @@ export const messageSchema = new Schema({
   userId: field({ type: String, index: true }),
   createdAt: field({ type: Date, index: true }),
   isCustomerRead: field({ type: Boolean }),
+  botData: field({ type: Object }),
   formWidgetData: field({ type: Object }),
   messengerAppData: field({ type: Object }),
   engageData: field({ type: engageDataSchema }),
+  contentType: field({
+    type: String,
+    enum: MESSAGE_TYPES.ALL,
+    default: MESSAGE_TYPES.TEXT,
+  }),
 });

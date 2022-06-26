@@ -1,97 +1,79 @@
-const commonTypes = `
-  order: Int
-  createdAt: Date
-`;
+import { commonDragParams, commonMutationParams, commonTypes, conformityQueryFields, copyParams } from './common';
 
 export const types = `
   type Deal {
     _id: String!
-    name: String!
-    stageId: String
-    pipeline: Pipeline
-    boardId: String
-    companyIds: [String]
-    customerIds: [String]
-    assignedUserIds: [String]
     amount: JSON
-    closeDate: Date
-    description: String
     companies: [Company]
     customers: [Customer]
     products: JSON
     productsData: JSON
-    assignedUsers: [User]
-    modifiedAt: Date
-    modifiedBy: String
-    stage: Stage
-    isWatched: Boolean
+    paymentsData: JSON
     ${commonTypes}
   }
 
-  type DealTotalAmount {
-    _id: String
-    currency: String
+  type DealTotalCurrency {
     amount: Float
+    name: String
+  }
+
+  type TotalForType {
+    _id: String
+    name: String
+    currencies: [DealTotalCurrency]
   }
 
   type DealTotalAmounts {
     _id: String
     dealCount: Int
-    dealAmounts: [DealTotalAmount]
+    totalForType: [TotalForType]
   }
 `;
+
+const dealMutationParams = `
+  paymentsData: JSON,
+  productsData: JSON,
+`;
+
+const commonQueryParams = `
+  date: ItemDate
+  pipelineId: String
+  customerIds: [String]
+  companyIds: [String]
+  assignedUserIds: [String]
+  productIds: [String]
+  closeDateType: String
+  labelIds: [String]
+  search: String
+  priority: [String]
+  sortField: String
+  sortDirection: Int
+  userIds: [String]
+  `;
 
 export const queries = `
   dealDetail(_id: String!): Deal
   deals(
     initialStageId: String
-    pipelineId: String
     stageId: String
-    customerIds: [String]
-    companyIds: [String]
-    date: ItemDate
     skip: Int
-    search: String
-    assignedUserIds: [String]
-    productIds: [String]
-    nextDay: String
-    nextWeek: String
-    nextMonth: String
-    noCloseDate: String
-    overdue: String
-  ): [Deal]
+    ${commonQueryParams}
+    ${conformityQueryFields}
+    ): [Deal]
+  archivedDeals(pipelineId: String!, search: String, page: Int, perPage: Int): [Deal]
+  archivedDealsCount(pipelineId: String!, search: String): Int
   dealsTotalAmounts(
-    date: ItemDate 
-    pipelineId: String 
-    customerIds: [String]
-    companyIds: [String]
-    assignedUserIds: [String]
-    productIds: [String]
-    nextDay: String
-    nextWeek: String
-    nextMonth: String
-    noCloseDate: String
-    overdue: String
+    ${commonQueryParams}
+    ${conformityQueryFields}
   ): DealTotalAmounts
 `;
 
-const commonParams = `
-  name: String!,
-  stageId: String,
-  assignedUserIds: [String],
-  companyIds: [String],
-  customerIds: [String],
-  closeDate: Date,
-  description: String,
-  order: Int,
-  productsData: JSON
-`;
-
 export const mutations = `
-  dealsAdd(${commonParams}): Deal
-  dealsEdit(_id: String!, ${commonParams}): Deal
-  dealsChange( _id: String!, destinationStageId: String): Deal
-  dealsUpdateOrder(stageId: String!, orders: [OrderItem]): [Deal]
+  dealsAdd(name: String!, ${copyParams}, ${dealMutationParams}, ${commonMutationParams}): Deal
+  dealsEdit(_id: String!, name: String, ${dealMutationParams}, ${commonMutationParams}): Deal
+  dealsChange(${commonDragParams}): Deal
   dealsRemove(_id: String!): Deal
   dealsWatch(_id: String, isAdd: Boolean): Deal
+  dealsCopy(_id: String!, proccessId: String): Deal
+  dealsArchive(stageId: String!, proccessId: String): String
 `;

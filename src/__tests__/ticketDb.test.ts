@@ -1,7 +1,6 @@
 import {
   boardFactory,
-  companyFactory,
-  customerFactory,
+  conversationFactory,
   pipelineFactory,
   stageFactory,
   ticketFactory,
@@ -38,7 +37,18 @@ describe('Test Tickets model', () => {
     await Tickets.deleteMany({});
   });
 
-  // Test ticket
+  test('Get ticket', async () => {
+    try {
+      await Tickets.getTicket('fakeId');
+    } catch (e) {
+      expect(e.message).toBe('Ticket not found');
+    }
+
+    const response = await Tickets.getTicket(ticket._id);
+
+    expect(response).toBeDefined();
+  });
+
   test('Create ticket', async () => {
     const createdTicket = await Tickets.createTicket({
       stageId: ticket.stageId,
@@ -47,8 +57,28 @@ describe('Test Tickets model', () => {
 
     expect(createdTicket).toBeDefined();
     expect(createdTicket.stageId).toEqual(stage._id);
-    expect(createdTicket.createdAt).toEqual(ticket.createdAt);
     expect(createdTicket.userId).toEqual(user._id);
+  });
+
+  test('Create ticket Error(`Already converted a ticket`)', async () => {
+    const conversation = await conversationFactory();
+
+    const args = {
+      stageId: ticket.stageId,
+      sourceConversationId: conversation._id,
+      userId: user._id,
+    };
+
+    const createdTicket = await Tickets.createTicket(args);
+
+    expect(createdTicket).toBeDefined();
+
+    // Already converted a ticket
+    try {
+      await Tickets.createTicket(args);
+    } catch (e) {
+      expect(e.message).toBe('Already converted a ticket');
+    }
   });
 
   test('Update ticket', async () => {
@@ -62,78 +92,26 @@ describe('Test Tickets model', () => {
     expect(updatedTicket.closeDate).toEqual(ticket.closeDate);
   });
 
-  test('Update ticket orders', async () => {
-    const dealToOrder = await ticketFactory({});
+  test('Watch ticket', async () => {
+    await Tickets.watchTicket(ticket._id, true, user._id);
 
-    const [updatedTicket, updatedDealToOrder] = await Tickets.updateOrder(stage._id, [
-      { _id: ticket._id, order: 9 },
-      { _id: dealToOrder._id, order: 3 },
-    ]);
+    const watchedTicket = await Tickets.getTicket(ticket._id);
 
-    expect(updatedTicket.stageId).toBe(stage._id);
-    expect(updatedTicket.order).toBe(3);
-    expect(updatedDealToOrder.order).toBe(9);
+    expect(watchedTicket.watchedUserIds).toContain(user._id);
+
+    // testing unwatch
+    await Tickets.watchTicket(ticket._id, false, user._id);
+
+    const unwatchedTicket = await Tickets.getTicket(ticket._id);
+
+    expect(unwatchedTicket.watchedUserIds).not.toContain(user._id);
   });
 
-  test('Remove ticket', async () => {
-    const isDeleted = await Tickets.removeTicket(ticket.id);
+  test('Test removeTickets()', async () => {
+    await Tickets.removeTickets([ticket._id]);
 
-    expect(isDeleted).toBeTruthy();
-  });
+    const removed = await Tickets.findOne({ _id: ticket._id });
 
-  test('Remove ticket not found', async () => {
-    expect.assertions(1);
-
-    const fakeDealId = 'fakeDealId';
-
-    try {
-      await Tickets.removeTicket(fakeDealId);
-    } catch (e) {
-      expect(e.message).toEqual('Ticket not found');
-    }
-  });
-
-  test('Ticket change customer', async () => {
-    const newCustomer = await customerFactory({});
-
-    const customer1 = await customerFactory({});
-    const customer2 = await customerFactory({});
-    const dealObj = await ticketFactory({
-      customerIds: [customer2._id, customer1._id],
-    });
-
-    await Tickets.changeCustomer(newCustomer._id, [customer2._id, customer1._id]);
-
-    const result = await Tickets.findOne({ _id: dealObj._id });
-
-    if (!result) {
-      throw new Error('Ticket not found');
-    }
-
-    expect(result.customerIds).toContain(newCustomer._id);
-    expect(result.customerIds).not.toContain(customer1._id);
-    expect(result.customerIds).not.toContain(customer2._id);
-  });
-
-  test('Ticket change company', async () => {
-    const newCompany = await companyFactory({});
-
-    const company1 = await companyFactory({});
-    const company2 = await companyFactory({});
-    const dealObj = await ticketFactory({
-      companyIds: [company1._id, company2._id],
-    });
-
-    await Tickets.changeCompany(newCompany._id, [company1._id, company2._id]);
-
-    const result = await Tickets.findOne({ _id: dealObj._id });
-
-    if (!result) {
-      throw new Error('Ticket not found');
-    }
-
-    expect(result.companyIds).toContain(newCompany._id);
-    expect(result.companyIds).not.toContain(company1._id);
-    expect(result.companyIds).not.toContain(company2._id);
+    expect(removed).toBe(null);
   });
 });

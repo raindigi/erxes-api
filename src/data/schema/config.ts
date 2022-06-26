@@ -2,29 +2,61 @@ export const types = `
   type Config {
     _id: String!
     code: String!
-    value: [String]!
+    value: JSON
   }
 
-  type GitInfos {
+  type GeneralInfo {
     packageVersion: String
-    branch: String
-    sha: String
-    abbreviatedSha: String
   }
 
-  type ProjectInfos {
-    erxesVersion: GitInfos
-    apiVersion: GitInfos
-    widgetVersion: GitInfos
-    widgetApiVersion: GitInfos
+  type OSInfo {
+    type: String
+    platform: String
+    arch: String
+    release: String
+    uptime: Int
+    loadavg: [Float]
+    totalmem: Float
+    freemem: Float
+    cpuCount: Int
+  }
+
+  type ProcessInfo {
+    nodeVersion: String
+    pid: String
+    uptime: String
+  }
+
+  type MongoInfo {
+    version: String
+    storageEngine: String
+  }
+
+  type Statistic {
+    packageVersion: String
+    os: OSInfo
+    process: ProcessInfo
+    mongo: MongoInfo
+  }
+
+  type ProjectStatistics {
+    erxesApi: Statistic
+    erxesIntegration: Statistic
+    erxes: GeneralInfo
+  }
+
+  type ENV {
+    USE_BRAND_RESTRICTIONS: String
   }
 `;
 
 export const queries = `
-  configsDetail(code: String!): Config
-  configsVersions: ProjectInfos
+  configs: [Config]
+  configsStatus: ProjectStatistics
+  configsGetEnv: ENV
+  configsConstants: JSON
 `;
 
 export const mutations = `
-  configsInsert(code: String!, value: [String]!): Config
+  configsUpdate(configsMap: JSON!): JSON
 `;

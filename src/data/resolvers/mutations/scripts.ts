@@ -1,8 +1,9 @@
 import { Scripts } from '../../../db/models';
 import { IScript } from '../../../db/models/definitions/scripts';
-import { IUserDocument } from '../../../db/models/definitions/users';
+import { MODULE_NAMES } from '../../constants';
+import { putCreateLog, putDeleteLog, putUpdateLog } from '../../logUtils';
 import { moduleCheckPermission } from '../../permissions/wrappers';
-import { putCreateLog, putDeleteLog, putUpdateLog } from '../../utils';
+import { IContext } from '../../types';
 
 interface IScriptsEdit extends IScript {
   _id: string;
@@ -10,65 +11,52 @@ interface IScriptsEdit extends IScript {
 
 const scriptMutations = {
   /**
-   * Create new script
+   * Creates a new script
    */
-  async scriptsAdd(_root, doc: IScript, { user }: { user: IUserDocument }) {
-    const script = await Scripts.createScript(doc);
+  async scriptsAdd(_root, doc: IScript, { user, docModifier }: IContext) {
+    const modifiedDoc = docModifier(doc);
+    const script = await Scripts.createScript(modifiedDoc);
 
-    if (script) {
-      await putCreateLog(
-        {
-          type: 'script',
-          newData: JSON.stringify(doc),
-          object: script,
-          description: `${script.name} has been created`,
-        },
-        user,
-      );
-    }
+    await putCreateLog(
+      {
+        type: MODULE_NAMES.SCRIPT,
+        newData: modifiedDoc,
+        object: script,
+      },
+      user,
+    );
 
     return script;
   },
 
   /**
-   * Update script
+   * Updates a script
    */
-  async scriptsEdit(_root, { _id, ...fields }: IScriptsEdit, { user }: { user: IUserDocument }) {
-    const script = await Scripts.findOne({ _id });
+  async scriptsEdit(_root, { _id, ...fields }: IScriptsEdit, { user }: IContext) {
+    const script = await Scripts.getScript(_id);
     const updated = await Scripts.updateScript(_id, fields);
 
-    if (script) {
-      await putUpdateLog(
-        {
-          type: 'script',
-          object: script,
-          newData: JSON.stringify(fields),
-          description: `${script.name} has been edited`,
-        },
-        user,
-      );
-    }
+    await putUpdateLog(
+      {
+        type: MODULE_NAMES.SCRIPT,
+        object: script,
+        newData: fields,
+        updatedDocument: updated,
+      },
+      user,
+    );
 
     return updated;
   },
 
   /**
-   * Delete script
+   * Deletes a script
    */
-  async scriptsRemove(_root, { _id }: { _id: string }, { user }: { user: IUserDocument }) {
-    const script = await Scripts.findOne({ _id });
+  async scriptsRemove(_root, { _id }: { _id: string }, { user }: IContext) {
+    const script = await Scripts.getScript(_id);
     const removed = await Scripts.removeScript(_id);
 
-    if (script) {
-      await putDeleteLog(
-        {
-          type: 'script',
-          object: script,
-          description: `${script.name} has been removed`,
-        },
-        user,
-      );
-    }
+    await putDeleteLog({ type: MODULE_NAMES.SCRIPT, object: script }, user);
 
     return removed;
   },

@@ -6,7 +6,8 @@ import { Permissions, Users, UsersGroups } from '../db/models';
 import './setup.ts';
 
 describe('Test permissions mutations', () => {
-  let _permission;
+  let userPermission;
+  let groupPermission;
   let _user;
   let _group;
   let context;
@@ -17,11 +18,23 @@ describe('Test permissions mutations', () => {
     module: 'module name',
   };
 
+  const permissionFields = `
+    _id
+    module
+    action
+    userId
+    groupId
+    requiredActions
+    allowed
+  `;
+
   beforeEach(async () => {
     // Creating test data
-    _permission = await permissionFactory();
-    _group = await usersGroupFactory();
     _user = await userFactory({ isOwner: true });
+    _group = await usersGroupFactory();
+
+    userPermission = await permissionFactory({ userId: _user._id });
+    groupPermission = await permissionFactory({ groupId: _group._id });
 
     context = { user: _user };
   });
@@ -66,7 +79,7 @@ describe('Test permissions mutations', () => {
     await checkLogin(permissionMutations.permissionsAdd, doc);
 
     // remove permission
-    await checkLogin(permissionMutations.permissionsRemove, { ids: [_permission._id] });
+    await checkLogin(permissionMutations.permissionsRemove, { ids: [userPermission._id] });
   });
 
   test('Create permission', async () => {
@@ -93,13 +106,7 @@ describe('Test permissions mutations', () => {
           groupIds: $groupIds
           allowed: $allowed
         ) {
-          _id
-          module
-          action
-          userId
-          groupId
-          requiredActions
-          allowed
+          ${permissionFields}
         }
       }
     `;
@@ -110,7 +117,7 @@ describe('Test permissions mutations', () => {
   });
 
   test('Remove permission', async () => {
-    const ids = [_permission._id];
+    const ids = [userPermission._id, groupPermission._id];
 
     const mutation = `
       mutation permissionsRemove($ids: [String]!) {
@@ -120,7 +127,8 @@ describe('Test permissions mutations', () => {
 
     await graphqlRequest(mutation, 'permissionsRemove', { ids }, context);
 
-    expect(await Permissions.find({ _id: _permission._id })).toEqual([]);
+    expect(await Permissions.find({ _id: userPermission._id })).toEqual([]);
+    expect(await Permissions.find({ _id: groupPermission._id })).toEqual([]);
   });
 
   test('Create group', async () => {
@@ -153,6 +161,9 @@ describe('Test permissions mutations', () => {
   });
 
   test('Update group', async () => {
+    await userFactory({ groupIds: [_group._id] });
+    await userFactory({ groupIds: [_group._id] });
+
     const user1 = await userFactory({});
     const user2 = await userFactory({});
 
@@ -193,8 +204,25 @@ describe('Test permissions mutations', () => {
       }
     `;
 
+    await userFactory({ groupIds: [_group._id] });
+    await userFactory({ groupIds: [_group._id] });
+
     await graphqlRequest(mutation, 'usersGroupsRemove', { _id: _group._id }, context);
 
     expect(await UsersGroups.findOne({ _id: _group._id })).toBe(null);
+  });
+
+  test('Test usersGroupsCopy()', async () => {
+    const mutation = `
+      mutation usersGroupsCopy($_id: String!) {
+        usersGroupsCopy(_id: $_id) {
+          _id
+        }
+      }
+    `;
+
+    const clone = await graphqlRequest(mutation, 'usersGroupsCopy', { _id: _group._id }, context);
+
+    expect(clone._id).toBeDefined();
   });
 });

@@ -11,6 +11,8 @@ import {
 } from '../db/factories';
 import { Brands, Channels, Conversations, Integrations, Tags, Users } from '../db/models';
 
+import { IntegrationsAPI } from '../data/dataSources';
+import { MESSAGE_TYPES } from '../db/models/definitions/constants';
 import './setup.ts';
 
 describe('conversationQueries', () => {
@@ -32,6 +34,7 @@ describe('conversationQueries', () => {
     $ids: [String]
     $startDate: String
     $endDate: String
+    $awaitingResponse: String
   `;
 
   const commonParams = `
@@ -47,11 +50,32 @@ describe('conversationQueries', () => {
     ids: $ids
     startDate: $startDate
     endDate: $endDate
+    awaitingResponse: $awaitingResponse
   `;
 
   const qryConversations = `
     query conversations(${commonParamDefs}) {
       conversations(${commonParams}) {
+        _id
+      }
+    }
+  `;
+
+  const qryCount = `
+    query conversationCounts(${commonParamDefs}, $only: String) {
+      conversationCounts(${commonParams}, only: $only)
+    }
+  `;
+
+  const qryTotalCount = `
+    query conversationsTotalCount(${commonParamDefs}) {
+      conversationsTotalCount(${commonParams})
+    }
+  `;
+
+  const qryConversationDetail = `
+    query conversationDetail($_id: String!) {
+      conversationDetail(_id: $_id) {
         _id
         content
         integrationId
@@ -66,6 +90,12 @@ describe('conversationQueries', () => {
         messageCount
         number
         tagIds
+        productBoardLink
+        videoCallData {
+          url
+          name
+          status
+        }
         messages {
           _id
           content
@@ -101,26 +131,11 @@ describe('conversationQueries', () => {
         assignedUser { _id }
         participatedUsers { _id }
         participatorCount
-      }
-    }
-  `;
-
-  const qryCount = `
-    query conversationCounts(${commonParamDefs}, $only: String) {
-      conversationCounts(${commonParams}, only: $only)
-    }
-  `;
-
-  const qryTotalCount = `
-    query conversationsTotalCount(${commonParamDefs}) {
-      conversationsTotalCount(${commonParams})
-    }
-  `;
-
-  const qryConversationDetail = `
-    query conversationDetail($_id: String!) {
-      conversationDetail(_id: $_id) {
-        _id
+        idleTime
+        facebookPost {
+          postId
+        }
+        callProAudio
       }
     }
   `;
@@ -139,6 +154,27 @@ describe('conversationQueries', () => {
     }
   `;
 
+  const qryConversationMessage = `
+      query conversationMessages($conversationId: String! $skip: Int $limit: Int) {
+        conversationMessages(conversationId: $conversationId skip: $skip limit: $limit) {
+          _id
+          internal
+          user { _id }
+          customer { _id }
+          mailData {
+            messageId
+          }
+          videoCallData {
+            url
+            name
+            status
+          }
+        }
+      }
+    `;
+
+  let dataSources;
+
   beforeEach(async () => {
     brand = await brandFactory();
     user = await userFactory({});
@@ -152,6 +188,8 @@ describe('conversationQueries', () => {
       memberIds: [user._id],
       integrationIds: [integration._id],
     });
+
+    dataSources = { IntegrationsAPI: new IntegrationsAPI() };
   });
 
   afterEach(async () => {
@@ -172,21 +210,171 @@ describe('conversationQueries', () => {
     await conversationMessageFactory({ conversationId: conversation._id });
     await conversationMessageFactory({ conversationId: conversation._id });
 
-    const qry = `
-      query conversationMessages($conversationId: String! $skip: Int $limit: Int) {
-        conversationMessages(conversationId: $conversationId skip: $skip limit: $limit) {
-          _id
-        }
-      }
-    `;
-
-    const responses = await graphqlRequest(qry, 'conversationMessages', {
+    let responses = await graphqlRequest(qryConversationMessage, 'conversationMessages', {
       conversationId: conversation._id,
       skip: 1,
       limit: 3,
     });
 
     expect(responses.length).toBe(3);
+
+    responses = await graphqlRequest(qryConversationMessage, 'conversationMessages', {
+      conversationId: conversation._id,
+      limit: 3,
+    });
+
+    expect(responses.length).toBe(3);
+
+    responses = await graphqlRequest(qryConversationMessage, 'conversationMessages', {
+      conversationId: conversation._id,
+    });
+
+    expect(responses.length).toBe(4);
+
+    // conversation is fake
+    responses = await graphqlRequest(qryConversationMessage, 'conversationMessages', {
+      conversationId: 'fakeConversationId',
+    });
+
+    expect(responses.length).toBe(0);
+
+    // internal is true
+    responses = await graphqlRequest(qryConversationMessage, 'conversationMessages', {
+      conversationId: conversation._id,
+    });
+
+    expect(responses.length).toBe(4);
+  });
+
+  test('Conversation message video call', async () => {
+    const conversation = await conversationFactory();
+    await conversationMessageFactory({ internal: false, conversationId: conversation._id });
+    await conversationMessageFactory({ conversationId: conversation._id });
+
+    await conversationMessageFactory({
+      conversationId: conversation._id,
+      contentType: MESSAGE_TYPES.VIDEO_CALL,
+      internal: false,
+    });
+
+    let responses = await graphqlRequest(
+      qryConversationMessage,
+      'conversationMessages',
+      {
+        conversationId: conversation._id,
+      },
+      { dataSources },
+    );
+
+    expect(responses[0].videoCallData).toBeNull();
+
+    const spy = jest.spyOn(dataSources.IntegrationsAPI, 'fetchApi');
+    spy.mockImplementation(() => Promise.resolve({}));
+
+    responses = await graphqlRequest(
+      qryConversationMessage,
+      'conversationMessages',
+      {
+        conversationId: conversation._id,
+      },
+      { dataSources },
+    );
+
+    responses = await graphqlRequest(
+      qryConversationMessage,
+      'conversationMessages',
+      {
+        conversationId: conversation._id,
+      },
+      { dataSources },
+    );
+
+    expect(responses[0].videoCallData).toBeNull();
+
+    spy.mockRestore();
+  });
+
+  test('Conversation messages (messenger kind)', async () => {
+    const messageIntegration = await integrationFactory({ kind: 'messenger' });
+    const messageIntegrationConversation = await conversationFactory({ integrationId: messageIntegration._id });
+
+    await conversationMessageFactory({ conversationId: messageIntegrationConversation._id, internal: false });
+
+    const responses = await graphqlRequest(qryConversationMessage, 'conversationMessages', {
+      conversationId: messageIntegrationConversation._id,
+    });
+
+    expect(responses.length).toBe(1);
+  });
+
+  test('Conversation messages (No integration)', async () => {
+    // no integration
+    const noIntegrationConversation = await conversationFactory();
+
+    await conversationMessageFactory({ conversationId: noIntegrationConversation._id, internal: false });
+
+    const responses = await graphqlRequest(qryConversationMessage, 'conversationMessages', {
+      conversationId: noIntegrationConversation._id,
+    });
+
+    expect(responses.length).toBe(1);
+  });
+
+  test('Conversation messages (Integrations api is not running)', async () => {
+    const nyalsGmailIntegration = await integrationFactory({ kind: 'nylas-gmail' });
+    const nyalsGmailConversation = await conversationFactory({ integrationId: nyalsGmailIntegration._id });
+
+    await conversationMessageFactory({ conversationId: nyalsGmailConversation._id, internal: false });
+
+    const gmailIntegration = await integrationFactory({ kind: 'gmail' });
+    const gmailConversation = await conversationFactory({ integrationId: gmailIntegration._id });
+
+    await conversationMessageFactory({ conversationId: gmailConversation._id, internal: false });
+
+    try {
+      await graphqlRequest(
+        qryConversationMessage,
+        'conversationMessages',
+        {
+          conversationId: nyalsGmailConversation._id,
+        },
+        { dataSources },
+      );
+    } catch (e) {
+      expect(e[0].message).toBe('Integrations api is not running');
+    }
+
+    try {
+      await graphqlRequest(
+        qryConversationMessage,
+        'conversationMessages',
+        {
+          conversationId: gmailConversation._id,
+        },
+        { dataSources },
+      );
+    } catch (e) {
+      expect(e[0].message).toBe('Integrations api is not running');
+    }
+  });
+
+  test('Conversation messages total count', async () => {
+    const conversation = await conversationFactory();
+
+    await conversationMessageFactory({ conversationId: conversation._id });
+    await conversationMessageFactory({ conversationId: conversation._id });
+    await conversationMessageFactory({ conversationId: conversation._id });
+    await conversationMessageFactory({ conversationId: conversation._id });
+
+    const qry = `
+      query conversationMessagesTotalCount($conversationId: String!) {
+        conversationMessagesTotalCount(conversationId: $conversationId)
+      }
+    `;
+
+    const responses = await graphqlRequest(qry, 'conversationMessagesTotalCount', { conversationId: conversation._id });
+
+    expect(responses).toBe(4);
   });
 
   test('Conversations filtered by ids', async () => {
@@ -211,11 +399,21 @@ describe('conversationQueries', () => {
     await conversationFactory();
     await conversationFactory();
 
-    const responses = await graphqlRequest(qryConversations, 'conversations', {
+    let responses = await graphqlRequest(qryConversations, 'conversations', {
       channelId: channel._id,
     });
 
     expect(responses.length).toBe(1);
+
+    const channelNoIntegration = await channelFactory({
+      memberIds: [user._id],
+    });
+
+    responses = await graphqlRequest(qryConversations, 'conversations', {
+      channelId: channelNoIntegration._id,
+    });
+
+    expect(responses.length).toBe(0);
   });
 
   test('Conversations filtered by brand', async () => {
@@ -240,6 +438,15 @@ describe('conversationQueries', () => {
     await conversationFactory({ integrationId: integration._id });
 
     const responses = await graphqlRequest(qryConversations, 'conversations', { participating: 'true' }, { user });
+
+    expect(responses.length).toBe(1);
+  });
+
+  test('Conversations filtered by awaiting response', async () => {
+    const conv = await conversationFactory({ integrationId: integration._id });
+    await conversationMessageFactory({ conversationId: conv._id, customerId: 'customerId' });
+
+    const responses = await graphqlRequest(qryConversations, 'conversations', { awaitingResponse: 'true' }, { user });
 
     expect(responses.length).toBe(1);
   });
@@ -313,8 +520,8 @@ describe('conversationQueries', () => {
   });
 
   test('Conversations filtered by integration type', async () => {
-    const integration1 = await integrationFactory({ kind: 'form' });
-    const integration2 = await integrationFactory({ kind: 'form' });
+    const integration1 = await integrationFactory({ kind: 'lead' });
+    const integration2 = await integrationFactory({ kind: 'lead' });
 
     await conversationFactory({ integrationId: integration._id });
     await conversationFactory({ integrationId: integration1._id });
@@ -534,8 +741,8 @@ describe('conversationQueries', () => {
   });
 
   test('Count conversations by integration type', async () => {
-    const integration1 = await integrationFactory({ kind: 'form' });
-    const integration2 = await integrationFactory({ kind: 'form' });
+    const integration1 = await integrationFactory({ kind: 'lead' });
+    const integration2 = await integrationFactory({ kind: 'lead' });
 
     // conversation with integration type 'messenger'
     await conversationFactory({ integrationId: integration._id });
@@ -693,8 +900,8 @@ describe('conversationQueries', () => {
   });
 
   test('Get total count of conversations by integration type', async () => {
-    const integration1 = await integrationFactory({ kind: 'form' });
-    const integration2 = await integrationFactory({ kind: 'form' });
+    const integration1 = await integrationFactory({ kind: 'lead' });
+    const integration2 = await integrationFactory({ kind: 'lead' });
 
     // integration with type messenger
     await conversationFactory({ integrationId: integration._id });
@@ -743,6 +950,129 @@ describe('conversationQueries', () => {
     );
 
     expect(response._id).toBe(conversation._id);
+    expect(response.facebookPost).toBe(null);
+
+    const spy = jest.spyOn(dataSources.IntegrationsAPI, 'fetchApi');
+    spy.mockImplementation(() => Promise.resolve([]));
+
+    const facebookIntegration = await integrationFactory({ kind: 'facebook-post' });
+    const facebookConversation = await conversationFactory({ integrationId: facebookIntegration._id });
+
+    try {
+      await graphqlRequest(
+        qryConversationDetail,
+        'conversationDetail',
+        { _id: facebookConversation._id },
+        { user, dataSources },
+      );
+    } catch (e) {
+      expect(e[0].message).toBeDefined();
+    }
+
+    spy.mockRestore();
+  });
+
+  test('Conversation detail video call', async () => {
+    const messengerConversation = await conversationFactory();
+
+    await conversationMessageFactory({
+      conversationId: messengerConversation._id,
+      contentType: MESSAGE_TYPES.VIDEO_CALL,
+    });
+
+    await graphqlRequest(
+      qryConversationDetail,
+      'conversationDetail',
+      { _id: messengerConversation._id },
+      { user, dataSources },
+    );
+
+    const spy = jest.spyOn(dataSources.IntegrationsAPI, 'fetchApi');
+    spy.mockImplementation(() => Promise.resolve(''));
+
+    const response = await graphqlRequest(
+      qryConversationDetail,
+      'conversationDetail',
+      { _id: messengerConversation._id },
+      { user, dataSources },
+    );
+
+    expect(response.videoCallData).not.toBeNull();
+
+    spy.mockRestore();
+  });
+
+  test('Conversation detail product board', async () => {
+    const messengerConversation = await conversationFactory();
+    await conversationMessageFactory({
+      conversationId: messengerConversation._id,
+      contentType: MESSAGE_TYPES.VIDEO_CALL,
+    });
+
+    await graphqlRequest(
+      qryConversationDetail,
+      'conversationDetail',
+      { _id: messengerConversation._id },
+      { user, dataSources },
+    );
+
+    const spy = jest.spyOn(dataSources.IntegrationsAPI, 'fetchApi');
+    spy.mockImplementation(() => Promise.resolve(''));
+
+    const response = await graphqlRequest(
+      qryConversationDetail,
+      'conversationDetail',
+      { _id: messengerConversation._id },
+      { user, dataSources },
+    );
+
+    expect(response.productBoardLink).not.toBeNull();
+
+    spy.mockRestore();
+  });
+
+  test('Conversation detail callpro audio', async () => {
+    const callProIntegration = await integrationFactory({ kind: 'callpro' });
+    const callProConverstaion = await conversationFactory({ integrationId: callProIntegration._id });
+
+    try {
+      await graphqlRequest(
+        qryConversationDetail,
+        'conversationDetail',
+        { _id: callProConverstaion._id },
+        { user, dataSources },
+      );
+    } catch (e) {
+      expect(e[0].message).toBe('Integrations api is not running');
+    }
+
+    const spy = jest.spyOn(dataSources.IntegrationsAPI, 'fetchApi');
+
+    spy.mockImplementation(() => Promise.resolve());
+
+    const normalUser = await userFactory({ isOwner: false });
+
+    try {
+      await graphqlRequest(
+        qryConversationDetail,
+        'conversationDetail',
+        { _id: callProConverstaion._id },
+        { user, dataSources },
+      );
+    } catch (e) {
+      expect(e[0].message).toBeDefined();
+    }
+
+    try {
+      await graphqlRequest(
+        qryConversationDetail,
+        'conversationDetail',
+        { _id: callProConverstaion._id },
+        { user: normalUser, dataSources },
+      );
+    } catch (e) {
+      expect(e[0].message).toBeDefined();
+    }
   });
 
   test('Get last conversation by channel', async () => {
@@ -773,5 +1103,49 @@ describe('conversationQueries', () => {
     const response = await graphqlRequest(qryTotalUnread, 'conversationsTotalUnreadCount', {}, { user });
 
     expect(response).toBe(1);
+  });
+
+  test('Facebook comments', async () => {
+    const qry = `
+      query converstationFacebookComments($postId: String!) {
+        converstationFacebookComments(postId: $postId) {
+          postId
+        }
+      }
+    `;
+
+    try {
+      await graphqlRequest(qry, 'converstationFacebookComments', { postId: 'postId' }, { dataSources });
+    } catch (e) {
+      expect(e[0].message).toBe('Integrations api is not running');
+    }
+
+    const spy = jest.spyOn(dataSources.IntegrationsAPI, 'fetchApi');
+    spy.mockImplementation(() => Promise.resolve([]));
+
+    await graphqlRequest(qry, 'converstationFacebookComments', { postId: 'postId' }, { dataSources });
+
+    spy.mockRestore();
+  });
+
+  test('Facebook comments', async () => {
+    const qry = `
+      query converstationFacebookCommentsCount($postId: String!, $isResolved: Boolean) {
+        converstationFacebookCommentsCount(postId: $postId, isResolved:$isResolved) 
+      }
+    `;
+
+    try {
+      await graphqlRequest(qry, 'converstationFacebookComments', { postId: 'postId' }, { dataSources });
+    } catch (e) {
+      expect(e[0].message).toBe('Integrations api is not running');
+    }
+
+    const spy = jest.spyOn(dataSources.IntegrationsAPI, 'fetchApi');
+    spy.mockImplementation(() => Promise.resolve([]));
+
+    await graphqlRequest(qry, 'converstationFacebookComments', { postId: 'postId' }, { dataSources });
+
+    spy.mockRestore();
   });
 });

@@ -1,23 +1,31 @@
-import { connect } from '../db/connection';
+import { MongoMemoryServer } from 'mongodb-memory-server';
+import * as mongoose from 'mongoose';
+import { connectionOptions } from '../db/connection';
+import { initMemoryStorage } from '../inmemoryStorage';
+import { initBroker } from '../messageBroker';
 
-let db;
+// May require additional time for downloading MongoDB binaries
+jasmine.DEFAULT_TIMEOUT_INTERVAL = 600000;
 
-beforeAll(async done => {
-  jest.setTimeout(30000);
+let mongoServer;
 
-  db = await connect(
-    (process.env.TEST_MONGO_URL || '').replace(
-      'test',
-      `erxes-test-${Math.random()
-        .toString()
-        .replace(/\./g, '')}`,
-    ),
-    3,
-  );
+beforeAll(async () => {
+  mongoServer = new MongoMemoryServer();
 
-  done();
+  await initBroker();
+
+  initMemoryStorage();
+
+  const mongoUri = await mongoServer.getConnectionString();
+
+  await mongoose.connect(mongoUri, { ...connectionOptions, useUnifiedTopology: true });
 });
 
-afterAll(() => {
-  return db.connection.dropDatabase();
+afterAll(async () => {
+  await mongoose.disconnect();
+  await mongoServer.stop();
+
+  if (global.gc) {
+    global.gc();
+  }
 });

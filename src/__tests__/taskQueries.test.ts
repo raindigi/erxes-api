@@ -1,7 +1,17 @@
 import { graphqlRequest } from '../db/connection';
-import { companyFactory, customerFactory, stageFactory, taskFactory, userFactory } from '../db/factories';
+import {
+  boardFactory,
+  companyFactory,
+  conformityFactory,
+  customerFactory,
+  pipelineFactory,
+  stageFactory,
+  taskFactory,
+  userFactory,
+} from '../db/factories';
 import { Tasks } from '../db/models';
 
+import { BOARD_STATUSES, BOARD_TYPES } from '../db/models/definitions/constants';
 import './setup.ts';
 
 describe('taskQueries', () => {
@@ -9,8 +19,6 @@ describe('taskQueries', () => {
     _id
     name
     stageId
-    companyIds
-    customerIds
     assignedUserIds
     closeDate
     description
@@ -23,31 +31,40 @@ describe('taskQueries', () => {
     assignedUsers {
       _id
     }
+    isWatched
+    hasNotified
+    labels { _id }
+    pipeline { _id }
+    boardId
+    stage { _id }
+    createdUser { _id }
   `;
 
   const qryTaskFilter = `
     query tasks(
-      $stageId: String 
+      $stageId: String
       $assignedUserIds: [String]
       $customerIds: [String]
       $companyIds: [String]
-      $nextDay: String
-      $nextWeek: String
-      $nextMonth: String
-      $noCloseDate: String
-      $overdue: String
+      $priority: [String]
+      $closeDateType: String
     ) {
       tasks(
-        stageId: $stageId 
+        stageId: $stageId
         customerIds: $customerIds
         assignedUserIds: $assignedUserIds
         companyIds: $companyIds
-        nextDay: $nextDay
-        nextWeek: $nextWeek
-        nextMonth: $nextMonth
-        noCloseDate: $noCloseDate
-        overdue: $overdue
+        priority: $priority
+        closeDateType: $closeDateType
       ) {
+        ${commonTaskTypes}
+      }
+    }
+  `;
+
+  const qryDetail = `
+    query taskDetail($_id: String!) {
+      taskDetail(_id: $_id) {
         ${commonTaskTypes}
       }
     }
@@ -71,7 +88,14 @@ describe('taskQueries', () => {
   test('Task filter by customers', async () => {
     const { _id } = await customerFactory();
 
-    await taskFactory({ customerIds: [_id] });
+    const task = await taskFactory({});
+
+    await conformityFactory({
+      mainType: 'task',
+      mainTypeId: task._id,
+      relType: 'customer',
+      relTypeId: _id,
+    });
 
     const response = await graphqlRequest(qryTaskFilter, 'tasks', { customerIds: [_id] });
 
@@ -81,15 +105,32 @@ describe('taskQueries', () => {
   test('Task filter by companies', async () => {
     const { _id } = await companyFactory();
 
-    await taskFactory({ companyIds: [_id] });
+    const task = await taskFactory({});
+
+    await conformityFactory({
+      mainType: 'company',
+      mainTypeId: _id,
+      relType: 'task',
+      relTypeId: task._id,
+    });
 
     const response = await graphqlRequest(qryTaskFilter, 'tasks', { companyIds: [_id] });
 
     expect(response.length).toBe(1);
   });
 
+  test('Task filter by priority', async () => {
+    await taskFactory({ priority: 'critical' });
+
+    const response = await graphqlRequest(qryTaskFilter, 'tasks', { priority: ['critical'] });
+
+    expect(response.length).toBe(1);
+  });
+
   test('Tasks', async () => {
-    const stage = await stageFactory();
+    const board = await boardFactory({ type: BOARD_TYPES.TASK });
+    const pipeline = await pipelineFactory({ boardId: board._id, type: BOARD_TYPES.TASK });
+    const stage = await stageFactory({ pipelineId: pipeline._id, type: BOARD_TYPES.TASK });
 
     const args = { stageId: stage._id };
 
@@ -97,7 +138,7 @@ describe('taskQueries', () => {
     await taskFactory(args);
     await taskFactory(args);
 
-    const qry = `
+    const qryList = `
       query tasks($stageId: String!) {
         tasks(stageId: $stageId) {
           ${commonTaskTypes}
@@ -105,26 +146,126 @@ describe('taskQueries', () => {
       }
     `;
 
-    const response = await graphqlRequest(qry, 'tasks', args);
+    const response = await graphqlRequest(qryList, 'tasks', args);
 
     expect(response.length).toBe(3);
   });
 
   test('Task detail', async () => {
     const task = await taskFactory();
+    const response = await graphqlRequest(qryDetail, 'taskDetail', { _id: task._id });
 
-    const args = { _id: task._id };
+    expect(response._id).toBe(task._id);
+  });
+
+  test('Task detail with watchedUserIds', async () => {
+    const user = await userFactory();
+    const watchedTask = await taskFactory({ watchedUserIds: [user._id] });
+
+    const response = await graphqlRequest(
+      qryDetail,
+      'taskDetail',
+      {
+        _id: watchedTask._id,
+      },
+      { user },
+    );
+
+    expect(response._id).toBe(watchedTask._id);
+    expect(response.isWatched).toBe(true);
+  });
+
+  test('Get archived task', async () => {
+    const pipeline = await pipelineFactory({ type: BOARD_TYPES.TASK });
+    const stage = await stageFactory({ pipelineId: pipeline._id });
+    const args = {
+      stageId: stage._id,
+      status: BOARD_STATUSES.ARCHIVED,
+    };
+
+    await taskFactory({ ...args, name: 'james' });
+    await taskFactory({ ...args, name: 'jone' });
+    await taskFactory({ ...args, name: 'gerrad' });
 
     const qry = `
-      query taskDetail($_id: String!) {
-        taskDetail(_id: $_id) {
-          ${commonTaskTypes}
+      query archivedTasks(
+        $pipelineId: String!,
+        $search: String,
+        $page: Int,
+        $perPage: Int
+      ) {
+        archivedTasks(
+          pipelineId: $pipelineId
+          search: $search
+          page: $page
+          perPage: $perPage
+        ) {
+          _id
         }
       }
     `;
 
-    const response = await graphqlRequest(qry, 'taskDetail', args);
+    let response = await graphqlRequest(qry, 'archivedTasks', {
+      pipelineId: pipeline._id,
+    });
 
-    expect(response._id).toBe(task._id);
+    expect(response.length).toBe(3);
+
+    response = await graphqlRequest(qry, 'archivedTasks', {
+      pipelineId: pipeline._id,
+      search: 'james',
+    });
+
+    expect(response.length).toBe(1);
+
+    response = await graphqlRequest(qry, 'archivedTasks', {
+      pipelineId: 'fakeId',
+    });
+
+    expect(response.length).toBe(0);
+  });
+
+  test('Get archived task count ', async () => {
+    const pipeline = await pipelineFactory({ type: BOARD_TYPES.TASK });
+    const stage = await stageFactory({ pipelineId: pipeline._id });
+    const args = {
+      stageId: stage._id,
+      status: BOARD_STATUSES.ARCHIVED,
+    };
+
+    await taskFactory({ ...args, name: 'james' });
+    await taskFactory({ ...args, name: 'jone' });
+    await taskFactory({ ...args, name: 'gerrad' });
+
+    const qry = `
+      query archivedTasksCount(
+        $pipelineId: String!,
+        $search: String,
+      ) {
+        archivedTasksCount(
+          pipelineId: $pipelineId
+          search: $search
+        )
+      }
+    `;
+
+    let response = await graphqlRequest(qry, 'archivedTasksCount', {
+      pipelineId: pipeline._id,
+    });
+
+    expect(response).toBe(3);
+
+    response = await graphqlRequest(qry, 'archivedTasksCount', {
+      pipelineId: pipeline._id,
+      search: 'james',
+    });
+
+    expect(response).toBe(1);
+
+    response = await graphqlRequest(qry, 'archivedTasksCount', {
+      pipelineId: 'fakeId',
+    });
+
+    expect(response).toBe(0);
   });
 });

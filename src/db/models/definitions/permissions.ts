@@ -1,8 +1,8 @@
 import { Document, Schema } from 'mongoose';
-import { field } from '../utils';
+import { field } from './utils';
 
 export interface IPermission {
-  module?: string;
+  module: string;
   action: string;
   userId?: string;
   groupId?: string;
@@ -11,12 +11,11 @@ export interface IPermission {
 }
 
 export interface IPermissionParams {
-  module?: string;
-  actions?: string[];
+  module: string;
+  actions: string[];
   userIds?: string[];
   groupIds?: string[];
-  requiredActions?: string[];
-  allowed?: boolean;
+  allowed: boolean;
 }
 
 export interface IPermissionDocument extends IPermission, Document {
@@ -25,12 +24,12 @@ export interface IPermissionDocument extends IPermission, Document {
 
 export const permissionSchema = new Schema({
   _id: field({ pkey: true }),
-  module: field({ type: String }),
-  action: field({ type: String }),
-  userId: field({ type: String }),
-  groupId: field({ type: String }),
-  requiredActions: field({ type: [String], default: [] }),
-  allowed: field({ type: Boolean, default: false }),
+  module: field({ type: String, label: 'Module' }),
+  action: field({ type: String, label: 'Action' }),
+  userId: field({ type: String, label: 'User' }),
+  groupId: field({ type: String, label: 'User group' }),
+  requiredActions: field({ type: [String], default: [], label: 'Required actions' }),
+  allowed: field({ type: Boolean, default: false, label: 'Allowed' }),
 });
 
 export interface IUserGroup {
@@ -44,6 +43,6 @@ export interface IUserGroupDocument extends IUserGroup, Document {
 
 export const userGroupSchema = new Schema({
   _id: field({ pkey: true }),
-  name: field({ type: String, unique: true }),
-  description: field({ type: String }),
+  name: field({ type: String, unique: true, label: 'Name' }),
+  description: field({ type: String, label: 'Description' }),
 });

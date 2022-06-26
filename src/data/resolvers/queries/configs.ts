@@ -1,55 +1,90 @@
+import * as mongoose from 'mongoose';
+import * as os from 'os';
+import * as path from 'path';
 import { Configs } from '../../../db/models';
+import { DEFAULT_CONSTANT_VALUES } from '../../../db/models/definitions/constants';
 import { moduleRequireLogin } from '../../permissions/wrappers';
-import { getEnv, sendRequest } from '../../utils';
+import { getEnv, getSubServiceDomain, sendRequest } from '../../utils';
 
 const configQueries = {
   /**
    * Config object
    */
-  configsDetail(_root, { code }: { code: string }) {
-    return Configs.findOne({ code });
+  configs(_root) {
+    return Configs.find({});
   },
 
-  async configsVersions(_root) {
-    const erxesDomain = getEnv({ name: 'MAIN_APP_DOMAIN' });
-    const domain = getEnv({ name: 'DOMAIN' });
-    const widgetsApiDomain = getEnv({ name: 'WIDGETS_API_DOMAIN' });
-    const widgetsDomain = getEnv({ name: 'WIDGETS_DOMAIN' });
+  async configsStatus(_root, _args) {
+    const status: any = {
+      erxesApi: {},
+      erxesIntegration: {},
+      erxes: {},
+    };
 
-    let erxesVersion;
-    let apiVersion;
-    let widgetApiVersion;
-    let widgetVersion;
+    const { version, storageEngine } = await mongoose.connection.db.command({ serverStatus: 1 });
+
+    status.erxesApi.os = {
+      type: os.type(),
+      platform: os.platform(),
+      arch: os.arch(),
+      release: os.release(),
+      uptime: os.uptime(),
+      loadavg: os.loadavg(),
+      totalmem: os.totalmem(),
+      freemem: os.freemem(),
+      cpuCount: os.cpus().length,
+    };
+
+    status.erxesApi.process = {
+      nodeVersion: process.version,
+      pid: process.pid,
+      uptime: process.uptime(),
+    };
+
+    status.erxesApi.mongo = {
+      version,
+      storageEngine: storageEngine.name,
+    };
+
+    const projectPath = process.cwd();
+    status.erxesApi.packageVersion = require(path.join(projectPath, 'package.json')).version;
 
     try {
-      erxesVersion = await sendRequest({ url: `${erxesDomain}/version.json`, method: 'GET' });
+      const erxesDomain = getEnv({ name: 'MAIN_APP_DOMAIN' });
+      const erxesVersion = await sendRequest({ url: `${erxesDomain}/version.json`, method: 'GET' });
+
+      status.erxes.packageVersion = erxesVersion.packageVersion || '-';
     } catch (e) {
-      erxesVersion = {};
+      status.erxes.packageVersion = '-';
     }
 
     try {
-      apiVersion = await sendRequest({ url: `${domain}/static/version.json`, method: 'GET' });
+      const erxesIntegrationDomain = getSubServiceDomain({ name: 'INTEGRATIONS_API_DOMAIN' });
+      const erxesIntegration = await sendRequest({
+        url: `${erxesIntegrationDomain}/system-status`,
+        method: 'GET',
+      });
+
+      status.erxesIntegration = erxesIntegration || '-';
     } catch (e) {
-      apiVersion = {};
+      status.erxesIntegration = {
+        packageVersion: '-',
+      };
     }
 
-    try {
-      widgetApiVersion = await sendRequest({ url: `${widgetsApiDomain}/static/version.json`, method: 'GET' });
-    } catch (e) {
-      widgetApiVersion = {};
-    }
+    return status;
+  },
 
-    try {
-      widgetVersion = await sendRequest({ url: `${widgetsDomain}/build/version.json`, method: 'GET' });
-    } catch (e) {
-      widgetVersion = {};
-    }
-
+  configsGetEnv(_root) {
     return {
-      erxesVersion,
-      apiVersion,
-      widgetApiVersion,
-      widgetVersion,
+      USE_BRAND_RESTRICTIONS: process.env.USE_BRAND_RESTRICTIONS,
+    };
+  },
+
+  configsConstants(_root) {
+    return {
+      allValues: Configs.constants(),
+      defaultValues: DEFAULT_CONSTANT_VALUES,
     };
   },
 };

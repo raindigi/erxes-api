@@ -1,14 +1,34 @@
 import { Brands } from '../../../db/models';
 import { checkPermission, requireLogin } from '../../permissions/wrappers';
-import { paginate } from '../../utils';
+import { IContext } from '../../types';
+import { readFile } from '../../utils';
+
+interface IListArgs {
+  page?: number;
+  perPage?: number;
+  searchValue?: string;
+}
+
+const queryBuilder = (params: IListArgs, brandIdSelector: any) => {
+  const selector: any = { ...brandIdSelector };
+
+  const { searchValue } = params;
+
+  if (searchValue) {
+    selector.name = new RegExp(`.*${params.searchValue}.*`, 'i');
+  }
+
+  return selector;
+};
 
 const brandQueries = {
   /**
    * Brands list
    */
-  brands(_root, args: { page: number; perPage: number }) {
-    const brands = paginate(Brands.find({}), args);
-    return brands.sort({ createdAt: -1 });
+  brands(_root, args: IListArgs, { brandIdSelector }: IContext) {
+    const selector = queryBuilder(args, brandIdSelector);
+
+    return Brands.find(selector).sort({ createdAt: -1 });
   },
 
   /**
@@ -21,8 +41,8 @@ const brandQueries = {
   /**
    * Get all brands count. We will use it in pager
    */
-  brandsTotalCount() {
-    return Brands.find({}).countDocuments();
+  brandsTotalCount(_root, _args, { brandIdSelector }: IContext) {
+    return Brands.find(brandIdSelector).countDocuments();
   },
 
   /**
@@ -30,6 +50,10 @@ const brandQueries = {
    */
   brandsGetLast() {
     return Brands.findOne({}).sort({ createdAt: -1 });
+  },
+
+  brandsGetDefaultEmailConfig() {
+    return readFile('conversationCron');
   },
 };
 

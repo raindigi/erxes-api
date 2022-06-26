@@ -32,6 +32,8 @@ import {
   types as EmailTemplate,
 } from './emailTemplate';
 
+import { queries as EmailDeliveryQueries, types as EmailDelivery } from './emailDelivery';
+
 import {
   fieldsGroupsMutations as FieldGroupMutations,
   fieldsGroupsQueries as FieldGroupQueries,
@@ -93,17 +95,35 @@ import {
   types as ImportHistoryTypes,
 } from './importHistory';
 
-import {
-  mutations as MessengerAppMutations,
-  queries as MessengerAppQueries,
-  types as MessengerAppTypes,
-} from './messengerApp';
+import { mutations as MessengerAppMutations, types as MessengerAppTypes } from './messengerApp';
 
 import { mutations as TicketMutations, queries as TicketQueries, types as TicketTypes } from './ticket';
 
 import { mutations as TaskMutations, queries as TaskQueries, types as TaskTypes } from './task';
 
+import { mutations as GrowthHackMutations, queries as GrowthHackQueries, types as GrowthHackTypes } from './growthHack';
+
 import { queries as LogQueries, types as LogTypes } from './log';
+
+import {
+  mutations as PipelineTemplateMutations,
+  queries as PipelineTemplateQueries,
+  types as PipelineTemplateTypes,
+} from './pipelineTemplate';
+
+import { mutations as RobotMutations, queries as RobotQueries, types as RobotTypes } from './robot';
+
+import { mutations as ConformityMutations, types as ConformityTypes } from './conformity';
+
+import { mutations as ChecklistMutations, queries as ChecklistQueries, types as ChecklistTypes } from './checklist';
+import {
+  mutations as PipelineLabelMutations,
+  queries as PipelineLabelQueries,
+  types as PipelineLabelTypes,
+} from './pipelineLabel';
+
+import { mutations as WebhookMutations, queries as WebhookQueries, types as WebhookTypes } from './webhook';
+import { mutations as WidgetMutations, queries as WidgetQueries, types as WidgetTypes } from './widget';
 
 export const types = `
   scalar JSON
@@ -120,9 +140,11 @@ export const types = `
   ${Script}
   ${EmailTemplate}
   ${EngageTypes}
+  ${EmailDelivery}
   ${TagTypes}
   ${FieldTypes}
   ${FormTypes}
+  ${ConformityTypes}
   ${CustomerTypes}
   ${SegmentTypes}
   ${ConversationTypes}
@@ -140,6 +162,13 @@ export const types = `
   ${TicketTypes}
   ${TaskTypes}
   ${LogTypes}
+  ${GrowthHackTypes}
+  ${PipelineTemplateTypes}
+  ${ChecklistTypes}
+  ${RobotTypes}
+  ${PipelineLabelTypes}
+  ${WidgetTypes}
+  ${WebhookTypes}
 `;
 
 export const queries = `
@@ -152,6 +181,7 @@ export const queries = `
     ${ResponseTemplateQueries}
     ${ScriptQueries}
     ${EmailTemplateQueries}
+    ${EmailDeliveryQueries}
     ${FieldQueries}
     ${EngageQueries}
     ${FormQueries}
@@ -170,11 +200,17 @@ export const queries = `
     ${ConfigQueries}
     ${FieldGroupQueries}
     ${ImportHistoryQueries}
-    ${MessengerAppQueries}
     ${PermissionQueries}
     ${TicketQueries}
     ${TaskQueries}
     ${LogQueries}
+    ${GrowthHackQueries}
+    ${PipelineTemplateQueries}
+    ${ChecklistQueries}
+    ${RobotQueries}
+    ${PipelineLabelQueries}
+    ${WidgetQueries}
+    ${WebhookQueries}
   }
 `;
 
@@ -208,6 +244,14 @@ export const mutations = `
     ${PermissionMutations}
     ${TicketMutations}
     ${TaskMutations}
+    ${GrowthHackMutations}
+    ${PipelineTemplateMutations}
+    ${ConformityMutations}
+    ${ChecklistMutations}
+    ${RobotMutations}
+    ${PipelineLabelMutations}
+    ${WidgetMutations}
+    ${WebhookMutations}
   }
 `;
 
@@ -217,10 +261,19 @@ export const subscriptions = `
     conversationMessageInserted(_id: String!): ConversationMessage
     conversationClientMessageInserted(userId: String!): ConversationMessage
     conversationClientTypingStatusChanged(_id: String!): ConversationClientTypingStatusChangedResponse
-    conversationAdminMessageInserted(customerId: String!): ConversationMessage
+    conversationAdminMessageInserted(customerId: String!): ConversationAdminMessageInsertedResponse
+    conversationExternalIntegrationMessageInserted: JSON
+    conversationBotTypingStatus(_id: String!): JSON
     customerConnectionChanged(_id: String): CustomerConnectionChangedResponse
     activityLogsChanged: Boolean
     importHistoryChanged(_id: String!): ImportHistory
+    notificationInserted(userId: String): Notification
+    onboardingChanged(userId: String!): OnboardingNotification
+
+    pipelinesChanged(_id: String!): PipelineChangeResponse
+
+    checklistsChanged(contentType: String!, contentTypeId: String!): Checklist
+    checklistDetailChanged(_id: String!): Checklist
   }
 `;
 

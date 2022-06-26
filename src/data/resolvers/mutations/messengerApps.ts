@@ -1,104 +1,63 @@
-import { Forms, MessengerApps } from '../../../db/models';
-import { IUserDocument } from '../../../db/models/definitions/users';
+import { MessengerApps } from '../../../db/models';
 import { requireLogin } from '../../permissions/wrappers';
-import { putCreateLog, putDeleteLog } from '../../utils';
+import { IContext } from '../../types';
 
 const messengerAppMutations = {
-  /**
-   * Creates a messenger app knowledgebase
-   * @param {string} params.name Name
-   * @param {string} params.integrationId Integration
-   * @param {string} params.topicId Topic
-   */
-  async messengerAppsAddKnowledgebase(_root, params, { user }: { user: IUserDocument }) {
-    const { name, integrationId, topicId } = params;
-    const kb = await MessengerApps.createApp({
-      name,
-      kind: 'knowledgebase',
-      showInInbox: false,
-      credentials: {
-        integrationId,
-        topicId,
-      },
-    });
+  async messengerAppSave(
+    _root,
+    { integrationId, messengerApps }: { integrationId: string; messengerApps: any },
+    { docModifier }: IContext,
+  ) {
+    await MessengerApps.deleteMany({ 'credentials.integrationId': integrationId });
 
-    if (kb) {
-      await putCreateLog(
-        {
-          type: 'messengerAppKb',
-          newData: JSON.stringify(params),
-          object: kb,
-          description: `${name} has been created`,
-        },
-        user,
-      );
+    if (messengerApps.websites) {
+      for (const website of messengerApps.websites) {
+        const doc = {
+          kind: 'website',
+          credentials: {
+            integrationId,
+            description: website.description,
+            buttonText: website.buttonText,
+            url: website.url,
+          },
+        };
+
+        await MessengerApps.createApp(docModifier(doc));
+      }
     }
 
-    return kb;
-  },
+    if (messengerApps.knowledgebases) {
+      for (const knowledgebase of messengerApps.knowledgebases) {
+        const doc = {
+          kind: 'knowledgebase',
+          credentials: {
+            integrationId,
+            topicId: knowledgebase.topicId,
+          },
+        };
 
-  /**
-   * Creates a messenger app lead
-   * @param {string} params.name Name
-   * @param {string} params.integrationId Integration
-   * @param {string} params.formId Form
-   */
-  async messengerAppsAddLead(_root, params, { user }: { user: IUserDocument }) {
-    const { name, integrationId, formId } = params;
-    const form = await Forms.findOne({ _id: formId });
-
-    if (!form) {
-      throw new Error('Form not found');
+        await MessengerApps.createApp(docModifier(doc));
+      }
     }
 
-    const lead = await MessengerApps.createApp({
-      name,
-      kind: 'lead',
-      showInInbox: false,
-      credentials: {
-        integrationId,
-        formCode: form.code || '',
-      },
-    });
+    if (messengerApps.leads) {
+      for (const lead of messengerApps.leads) {
+        const doc = {
+          kind: 'lead',
+          credentials: {
+            integrationId,
+            formCode: lead.formCode,
+          },
+        };
 
-    if (lead) {
-      await putCreateLog(
-        {
-          type: 'messengerAppLead',
-          newData: JSON.stringify(params),
-          object: lead,
-          description: `${name} has been created`,
-        },
-        user,
-      );
+        await MessengerApps.createApp(docModifier(doc));
+      }
     }
 
-    return lead;
-  },
-
-  /*
-   * Remove app
-   */
-  async messengerAppsRemove(_root, { _id }: { _id: string }, { user }: { user: IUserDocument }) {
-    const messengerApp = await MessengerApps.findOne({ _id });
-    const removed = await MessengerApps.deleteOne({ _id });
-
-    if (messengerApp) {
-      await putDeleteLog(
-        {
-          type: 'messengerApp',
-          object: messengerApp,
-          description: `${messengerApp.name} has been removed`,
-        },
-        user,
-      );
-    }
-
-    return removed;
+    return 'success';
   },
 };
 
-requireLogin(messengerAppMutations, 'messengerAppsAddKnowledgebase');
-requireLogin(messengerAppMutations, 'messengerAppsAddLead');
+requireLogin(messengerAppMutations, 'messengerAppSave');
 
 export default messengerAppMutations;

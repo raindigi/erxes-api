@@ -1,3 +1,5 @@
+import { conformityQueryFields } from './common';
+
 export const types = `
   type Company {
     _id: String!
@@ -5,31 +7,26 @@ export const types = `
     createdAt: Date
     modifiedAt: Date
     avatar: String
-    
+
     size: Int
     website: String
     industry: String
     plan: String
     parentCompanyId: String
     ownerId: String
+    mergedIds: [String]
 
     names: [String]
     primaryName: String
-
     emails: [String]
     primaryEmail: String
-
-
     phones: [String]
     primaryPhone: String
 
-
-    leadStatus: String
-    lifecycleState: String
     businessType: String
     description: String
     doNotDisturb: String
-    links: CompanyLinks
+    links: JSON
     owner: User
     parentCompany: Company
 
@@ -38,22 +35,13 @@ export const types = `
     customFieldsData: JSON
 
     customers: [Customer]
-    deals: [Deal]
     getTags: [Tag]
+    code: String
   }
 
   type CompaniesListResponse {
     list: [Company],
     totalCount: Float,
-  }
-
-  type CompanyLinks {
-    linkedIn: String
-    twitter: String
-    facebook: String
-    github: String
-    youtube: String
-    website: String
   }
 `;
 
@@ -64,17 +52,18 @@ const queryParams = `
   tag: String
   ids: [String]
   searchValue: String
-  lifecycleState: String
-  leadStatus: String
+  autoCompletion: Boolean
+  autoCompletionType: String
   sortField: String
   sortDirection: Int
   brand: String
+  ${conformityQueryFields}
 `;
 
 export const queries = `
   companiesMain(${queryParams}): CompaniesListResponse
   companies(${queryParams}): [Company]
-  companyCounts(${queryParams}, byFakeSegment: JSON, only: String): JSON
+  companyCounts(${queryParams}, only: String): JSON
   companyDetail(_id: String!): Company
 `;
 
@@ -97,8 +86,6 @@ const commonFields = `
   parentCompanyId: String,
   email: String,
   ownerId: String,
-  leadStatus: String,
-  lifecycleState: String,
   businessType: String,
   description: String,
   doNotDisturb: String,
@@ -106,12 +93,12 @@ const commonFields = `
 
   tagIds: [String]
   customFieldsData: JSON
+  code: String
 `;
 
 export const mutations = `
   companiesAdd(${commonFields}): Company
   companiesEdit(_id: String!, ${commonFields}): Company
-  companiesEditCustomers(_id: String!, customerIds: [String]): Company
   companiesRemove(companyIds: [String]): [String]
   companiesMerge(companyIds: [String], companyFields: JSON) : Company
 `;

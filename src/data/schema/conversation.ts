@@ -24,8 +24,11 @@ export const types = `
     messageCount: Int
     number: Int
     tagIds: [String]
+    operatorStatus: String
 
     messages: [ConversationMessage]
+    facebookPost: FacebookPost
+    callProAudio: String
     tags: [Tag]
     customer: Customer
     integration: Integration
@@ -33,6 +36,8 @@ export const types = `
     assignedUser: User
     participatedUsers: [User]
     participatorCount: Int
+    videoCallData: VideoCallData
+    productBoardLink: String
   }
 
   type EngageData {
@@ -60,6 +65,7 @@ export const types = `
     conversationId: String
     internal: Boolean
     fromBot: Boolean
+    botData: JSON
     customerId: String
     userId: String
     createdAt: Date
@@ -69,6 +75,70 @@ export const types = `
     messengerAppData: JSON
     user: User
     customer: Customer
+    mailData: MailData
+    videoCallData: VideoCallData
+    contentType: String
+  }
+
+  type FacebookPost {
+    postId: String
+    recipientId: String
+    senderId: String
+    content:String
+    erxesApiId: String
+    attachments: [String]
+    timestamp: Date
+    permalink_url: String
+  }
+
+  type FacebookComment {
+    conversationId: String
+    commentId: String
+    postId: String
+    parentId: String
+    recipientId:String
+    senderId: String
+    permalink_url: String
+    attachments: [String]
+    content: String
+    erxesApiId: String
+    timestamp: Date
+    customer: Customer
+    commentCount: Int
+    isResolved: Boolean
+  }
+
+  type Email {
+    email: String
+  }
+
+  type MailData {
+    messageId: String,
+    threadId: String,
+    replyTo: [String],
+    inReplyTo: String,
+    subject: String,
+    body: String,
+    integrationEmail: String,
+    to: [Email],
+    from: [Email],
+    cc: [Email],
+    bcc: [Email],
+    accountId: String,
+    replyToMessageId: [String],
+    references: [String],
+    headerId: String,
+    attachments: [MailAttachment]
+  }
+
+  type MailAttachment {
+    id: String,
+    content_type: String,
+    filename: String,
+    mimeType: String,
+    size: Int,
+    attachmentId: String,
+    data: String,
   }
 
   type ConversationChangedResponse {
@@ -79,6 +149,17 @@ export const types = `
   type ConversationClientTypingStatusChangedResponse {
     conversationId: String!
     text: String
+  }
+
+  type ConversationAdminMessageInsertedResponse {
+    customerId: String!
+    unreadCount: Int
+  }
+
+  type VideoCallData {
+    url: String
+    name: String
+    status: String
   }
 
   input ConversationMessageParams {
@@ -95,13 +176,12 @@ export const types = `
   input AttachmentInput {
     url: String!
     name: String!
-    type: String!
+    type: String
     size: Float
   }
 `;
 
-const filterParams = `
-  limit: Int,
+const mutationFilterParams = `
   channelId: String
   status: String
   unassigned: String
@@ -109,10 +189,16 @@ const filterParams = `
   tag: String
   integrationType: String
   participating: String
+  awaitingResponse: String
   starred: String
-  ids: [String]
   startDate: String
   endDate: String
+`;
+
+const filterParams = `
+  limit: Int,
+  ids: [String]
+  ${mutationFilterParams}
 `;
 
 export const queries = `
@@ -122,7 +208,22 @@ export const queries = `
     conversationId: String!
     skip: Int
     limit: Int
+    getFirst: Boolean
   ): [ConversationMessage]
+
+  converstationFacebookComments(
+    postId: String!
+    isResolved: Boolean
+    commentId: String
+    senderId: String
+    skip: Int
+    limit: Int
+  ): [FacebookComment]
+
+  converstationFacebookCommentsCount(
+    postId: String!
+    isResolved: Boolean
+  ): JSON
 
   conversationMessagesTotalCount(conversationId: String!): Int
   conversationCounts(${filterParams}, only: String): JSON
@@ -139,10 +240,17 @@ export const mutations = `
     mentionedUserIds: [String],
     internal: Boolean,
     attachments: [AttachmentInput],
+    contentType: String
   ): ConversationMessage
-
+  conversationsReplyFacebookComment(conversationId: String, commentId: String, content: String): FacebookComment
+  conversationsChangeStatusFacebookComment(commentId: String): FacebookComment
   conversationsAssign(conversationIds: [String]!, assignedUserId: String): [Conversation]
   conversationsUnassign(_ids: [String]!): [Conversation]
   conversationsChangeStatus(_ids: [String]!, status: String!): [Conversation]
   conversationMarkAsRead(_id: String): Conversation
+  conversationDeleteVideoChatRoom(name: String!): Boolean
+  conversationCreateVideoChatRoom(_id: String!): VideoCallData
+  conversationCreateProductBoardNote(_id: String!): String
+  changeConversationOperator(_id: String! operatorStatus: String!): JSON
+  conversationResolveAll(${mutationFilterParams}): Int
 `;

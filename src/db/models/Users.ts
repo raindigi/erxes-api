@@ -4,7 +4,8 @@ import * as jwt from 'jsonwebtoken';
 import { Model, model } from 'mongoose';
 import * as sha256 from 'sha256';
 import { UsersGroups } from '.';
-import { IDetail, IEmailSignature, ILink, IUser, IUserDocument, userSchema } from './definitions/users';
+import { ILink } from './definitions/common';
+import { IDetail, IEmailSignature, IUser, IUserDocument, userSchema } from './definitions/users';
 
 const SALT_WORK_FACTOR = 10;
 
@@ -18,9 +19,12 @@ interface IEditProfile {
 interface IUpdateUser extends IEditProfile {
   password?: string;
   groupIds?: string[];
+  brandIds?: string[];
 }
 
 export interface IUserModel extends Model<IUserDocument> {
+  getUser(_id: string): Promise<IUserDocument>;
+  checkPassword(password: string): void;
   checkDuplication({
     email,
     idsToExclude,
@@ -35,12 +39,11 @@ export interface IUserModel extends Model<IUserDocument> {
   createUser(doc: IUser): Promise<IUserDocument>;
   updateUser(_id: string, doc: IUpdateUser): Promise<IUserDocument>;
   editProfile(_id: string, doc: IEditProfile): Promise<IUserDocument>;
-  updateOnBoardSeen({ _id }: { _id: string }): Promise<IUserDocument>;
   configEmailSignatures(_id: string, signatures: IEmailSignature[]): Promise<IUserDocument>;
   configGetNotificationByEmail(_id: string, isAllowed: boolean): Promise<IUserDocument>;
   setUserActiveOrInactive(_id: string): Promise<IUserDocument>;
-  generatePassword(password: string): string;
-  createUserWithConfirmation({ email, groupId }: { email: string; groupId: string }): string;
+  generatePassword(password: string): Promise<string>;
+  invite({ email, password, groupId }: { email: string; password: string; groupId: string }): string;
   resendInvitation({ email }: { email: string }): string;
   confirmInvitation({
     token,
@@ -57,6 +60,7 @@ export interface IUserModel extends Model<IUserDocument> {
   }): Promise<IUserDocument>;
   comparePassword(password: string, userPassword: string): boolean;
   resetPassword({ token, newPassword }: { token: string; newPassword: string }): Promise<IUserDocument>;
+  resetMemberPassword({ _id, newPassword }: { _id: string; newPassword: string }): Promise<IUserDocument>;
   changePassword({
     _id,
     currentPassword,
@@ -82,24 +86,33 @@ export interface IUserModel extends Model<IUserDocument> {
 
 export const loadClass = () => {
   class User {
+    public static async getUser(_id: string) {
+      const user = await Users.findOne({ _id });
+
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      return user;
+    }
+
+    public static checkPassword(password: string) {
+      if (!password.match(/^(?=.*\d)(?=.*[a-z])(?=.*[A-Z]).{8,}$/)) {
+        throw new Error(
+          'Must contain at least one number and one uppercase and lowercase letter, and at least 8 or more characters',
+        );
+      }
+    }
     /**
      * Checking if user has duplicated properties
      */
-    public static async checkDuplication({
-      email,
-      idsToExclude,
-      emails,
-    }: {
-      email?: string;
-      idsToExclude?: string | string[];
-      emails?: string[];
-    }) {
+    public static async checkDuplication({ email, idsToExclude }: { email?: string; idsToExclude?: string }) {
       const query: { [key: string]: any } = {};
       let previousEntry;
 
       // Adding exclude operator to the query
       if (idsToExclude) {
-        query._id = idsToExclude instanceof Array ? { $nin: idsToExclude } : { $ne: idsToExclude };
+        query._id = { $ne: idsToExclude };
       }
 
       // Checking if user has email
@@ -111,24 +124,16 @@ export const loadClass = () => {
           throw new Error('Duplicated email');
         }
       }
-
-      if (emails) {
-        previousEntry = await Users.find({ email: { $in: [emails] } });
-
-        if (previousEntry.length > 0) {
-          throw new Error('Duplicated emails');
-        }
-      }
     }
 
     public static getSecret() {
-      return 'dfjklsafjjekjtejifjidfjsfd';
+      return process.env.JWT_TOKEN_SECRET || '';
     }
 
     /**
      * Create new user
      */
-    public static async createUser({ username, email, password, details, links, groupIds }: IUser) {
+    public static async createUser({ username, email, password, details, links, groupIds, isOwner = false }: IUser) {
       // empty string password validation
       if (password === '') {
         throw new Error('Password can not be empty');
@@ -137,7 +142,10 @@ export const loadClass = () => {
       // Checking duplicated email
       await Users.checkDuplication({ email });
 
+      this.checkPassword(password);
+
       return Users.create({
+        isOwner,
         username,
         email,
         details,
@@ -152,14 +160,19 @@ export const loadClass = () => {
     /**
      * Update user information
      */
-    public static async updateUser(_id: string, { username, email, password, details, links, groupIds }: IUpdateUser) {
-      const doc = { username, email, password, details, links, groupIds };
+    public static async updateUser(
+      _id: string,
+      { username, email, password, details, links, groupIds, brandIds }: IUpdateUser,
+    ) {
+      const doc = { username, email, password, details, links, groupIds, brandIds };
 
       // Checking duplicated email
       await this.checkDuplication({ email, idsToExclude: _id });
 
       // change password
       if (password) {
+        this.checkPassword(password);
+
         doc.password = await this.generatePassword(password);
 
         // if there is no password specified then leave password field alone
@@ -185,7 +198,7 @@ export const loadClass = () => {
     /**
      * Create new user with invitation token
      */
-    public static async createUserWithConfirmation({ email, groupId }: { email: string; groupId: string }) {
+    public static async invite({ email, password, groupId }: { email: string; password: string; groupId: string }) {
       // Checking duplicated email
       await Users.checkDuplication({ email });
 
@@ -195,9 +208,14 @@ export const loadClass = () => {
 
       const { token, expires } = await User.generateToken();
 
+      this.checkPassword(password);
+
       await Users.create({
         email,
         groupIds: [groupId],
+        isActive: true,
+        // hash password
+        password: await this.generatePassword(password),
         registrationToken: token,
         registrationTokenExpires: expires,
       });
@@ -230,21 +248,6 @@ export const loadClass = () => {
       );
 
       return token;
-    }
-
-    /**
-     * User has seen on board set up
-     */
-    public static async updateOnBoardSeen({ _id }: { _id: string }) {
-      const user = await Users.findOne({ _id });
-
-      if (!user) {
-        throw new Error('User not found');
-      }
-
-      await Users.updateOne({ _id }, { $set: { hasSeenOnBoard: true } });
-
-      return user;
     }
 
     /**
@@ -281,6 +284,8 @@ export const loadClass = () => {
       if (password !== passwordConfirmation) {
         throw new Error('Password does not match');
       }
+
+      this.checkPassword(password);
 
       await Users.updateOne(
         { _id: user._id },
@@ -393,6 +398,8 @@ export const loadClass = () => {
         throw new Error('Password is required.');
       }
 
+      this.checkPassword(newPassword);
+
       // set new password
       await Users.findByIdAndUpdate(
         { _id: user._id },
@@ -402,6 +409,23 @@ export const loadClass = () => {
           resetPasswordExpires: undefined,
         },
       );
+
+      return Users.findOne({ _id: user._id });
+    }
+
+    /**
+     * Reset member's password by given _id & newPassword
+     */
+    public static async resetMemberPassword({ _id, newPassword }: { _id: string; newPassword: string }) {
+      const user = await Users.getUser(_id);
+
+      if (!newPassword) {
+        throw new Error('Password is required.');
+      }
+
+      this.checkPassword(newPassword);
+
+      await Users.updateOne({ _id }, { $set: { password: await this.generatePassword(newPassword) } });
 
       return Users.findOne({ _id: user._id });
     }
@@ -423,11 +447,9 @@ export const loadClass = () => {
         throw new Error('Password can not be empty');
       }
 
-      const user = await Users.findOne({ _id });
+      this.checkPassword(newPassword);
 
-      if (!user) {
-        throw new Error('User not found');
-      }
+      const user = await Users.getUser(_id);
 
       // check current password ============
       const valid = await this.comparePassword(currentPassword, user.password);
@@ -484,6 +506,7 @@ export const loadClass = () => {
         details: _user.details,
         isOwner: _user.isOwner,
         groupIds: _user.groupIds,
+        brandIds: _user.brandIds,
         username: _user.username,
       };
 
@@ -500,24 +523,19 @@ export const loadClass = () => {
      * Renews tokens
      */
     public static async refreshTokens(refreshToken: string) {
-      let _id = null;
+      let _id = '';
 
       try {
         // validate refresh token
         const { user } = jwt.verify(refreshToken, this.getSecret());
 
         _id = user._id;
-
         // if refresh token is expired then force to login
       } catch (e) {
         return {};
       }
 
-      const dbUser = await Users.findOne({ _id });
-
-      if (!dbUser) {
-        throw new Error('User not found');
-      }
+      const dbUser = await Users.getUser(_id);
 
       // recreate tokens
       const [newToken, newRefreshToken] = await this.createTokens(dbUser, this.getSecret());
@@ -542,7 +560,11 @@ export const loadClass = () => {
       deviceToken?: string;
     }) {
       const user = await Users.findOne({
-        $or: [{ email: { $regex: new RegExp(email, 'i') } }, { username: { $regex: new RegExp(email, 'i') } }],
+        $or: [
+          { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+          { username: { $regex: new RegExp(`^${email}$`, 'i') } },
+        ],
+        isActive: true,
       });
 
       if (!user || !user.password) {

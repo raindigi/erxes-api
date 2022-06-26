@@ -1,8 +1,9 @@
 import { ResponseTemplates } from '../../../db/models';
 import { IResponseTemplate } from '../../../db/models/definitions/responseTemplates';
-import { IUserDocument } from '../../../db/models/definitions/users';
+import { MODULE_NAMES } from '../../constants';
+import { putCreateLog, putDeleteLog, putUpdateLog } from '../../logUtils';
 import { moduleCheckPermission } from '../../permissions/wrappers';
-import { putCreateLog, putDeleteLog, putUpdateLog } from '../../utils';
+import { IContext } from '../../types';
 
 interface IResponseTemplatesEdit extends IResponseTemplate {
   _id: string;
@@ -10,65 +11,51 @@ interface IResponseTemplatesEdit extends IResponseTemplate {
 
 const responseTemplateMutations = {
   /**
-   * Create new response template
+   * Creates a new response template
    */
-  async responseTemplatesAdd(_root, doc: IResponseTemplate, { user }: { user: IUserDocument }) {
-    const template = await ResponseTemplates.create(doc);
+  async responseTemplatesAdd(_root, doc: IResponseTemplate, { user, docModifier }: IContext) {
+    const template = await ResponseTemplates.create(docModifier(doc));
 
-    if (template) {
-      await putCreateLog(
-        {
-          type: 'responseTemplate',
-          newData: JSON.stringify(doc),
-          object: template,
-          description: `${template.name} has been created`,
-        },
-        user,
-      );
-    }
+    await putCreateLog(
+      {
+        type: MODULE_NAMES.RESPONSE_TEMPLATE,
+        newData: doc,
+        object: template,
+      },
+      user,
+    );
 
     return template;
   },
 
   /**
-   * Update response template
+   * Updates a response template
    */
-  async responseTemplatesEdit(_root, { _id, ...fields }: IResponseTemplatesEdit, { user }: { user: IUserDocument }) {
-    const template = await ResponseTemplates.findOne({ _id });
+  async responseTemplatesEdit(_root, { _id, ...fields }: IResponseTemplatesEdit, { user }: IContext) {
+    const template = await ResponseTemplates.getResponseTemplate(_id);
     const updated = await ResponseTemplates.updateResponseTemplate(_id, fields);
 
-    if (template) {
-      await putUpdateLog(
-        {
-          type: 'responseTemplate',
-          object: template,
-          newData: JSON.stringify(fields),
-          description: `${template.name} has been edited`,
-        },
-        user,
-      );
-    }
+    await putUpdateLog(
+      {
+        type: MODULE_NAMES.RESPONSE_TEMPLATE,
+        object: template,
+        newData: fields,
+        updatedDocument: updated,
+      },
+      user,
+    );
 
     return updated;
   },
 
   /**
-   * Delete response template
+   * Deletes a response template
    */
-  async responseTemplatesRemove(_root, { _id }: { _id: string }, { user }: { user: IUserDocument }) {
-    const template = await ResponseTemplates.findOne({ _id });
+  async responseTemplatesRemove(_root, { _id }: { _id: string }, { user }: IContext) {
+    const template = await ResponseTemplates.getResponseTemplate(_id);
     const removed = await ResponseTemplates.removeResponseTemplate(_id);
 
-    if (template) {
-      await putDeleteLog(
-        {
-          type: 'responseTemplate',
-          object: template,
-          description: `${template.name} has been removed`,
-        },
-        user,
-      );
-    }
+    await putDeleteLog({ type: MODULE_NAMES.RESPONSE_TEMPLATE, object: template }, user);
 
     return removed;
   },

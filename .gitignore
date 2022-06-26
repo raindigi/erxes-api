@@ -2,6 +2,7 @@ node_modules
 dist
 static
 src/private/xlsTemplateOutputs
+src/private/uploads
 .DS_Store
 npm-debug.log*
 .env
@@ -11,6 +12,8 @@ dump.rdb
 *.swp
 *.swo
 .migrate
+
+oplog.timestamp
 
 # Google config file
 google_cred.json

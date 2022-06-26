@@ -1,4 +1,10 @@
-import { conversationFactory, conversationMessageFactory, customerFactory, userFactory } from '../db/factories';
+import {
+  conversationFactory,
+  conversationMessageFactory,
+  customerFactory,
+  engageDataFactory,
+  userFactory,
+} from '../db/factories';
 import { ConversationMessages, Conversations, Users } from '../db/models';
 import { CONVERSATION_STATUSES } from '../db/models/definitions/constants';
 
@@ -15,6 +21,8 @@ describe('Conversation db', () => {
     _conversation = await conversationFactory({});
     _conversationMessage = await conversationMessageFactory({
       conversationId: _conversation._id,
+      internal: false,
+      content: 'content',
     });
 
     _user = await userFactory({});
@@ -31,6 +39,30 @@ describe('Conversation db', () => {
     await Users.deleteMany({});
   });
 
+  test('Get conversation message', async () => {
+    try {
+      await ConversationMessages.getMessage('fakeId');
+    } catch (e) {
+      expect(e.message).toBe('Conversation message not found');
+    }
+
+    const response = await ConversationMessages.getMessage(_conversationMessage._id);
+
+    expect(response).toBeDefined();
+  });
+
+  test('Get conversation', async () => {
+    try {
+      await Conversations.getConversation('fakeId');
+    } catch (e) {
+      expect(e.message).toBe('Conversation not found');
+    }
+
+    const response = await Conversations.getConversation(_conversation._id);
+
+    expect(response).toBeDefined();
+  });
+
   test('Create conversation', async () => {
     const _number = (await Conversations.find().countDocuments()) + 1;
     const conversation = await Conversations.createConversation({
@@ -39,6 +71,7 @@ describe('Conversation db', () => {
       assignedUserId: _user._id,
       participatedUserIds: [_user._id],
       readUserIds: [_user._id],
+      status: CONVERSATION_STATUSES.NEW,
     });
 
     expect(conversation).toBeDefined();
@@ -65,8 +98,6 @@ describe('Conversation db', () => {
   });
 
   test('Create conversation message', async () => {
-    expect.assertions(17);
-
     // setting updatedAt to null to check when new message updatedAt field
     // must be setted
     _conversation.updatedAt = null;
@@ -88,10 +119,10 @@ describe('Conversation db', () => {
     }
 
     expect(updatedConversation.updatedAt).toEqual(expect.any(Date));
+    expect(updatedConversation.messageCount).toBe(2);
 
     expect(messageObj.content).toBe(_conversationMessage.content);
-    expect(messageObj.attachments.length).toBe(1);
-    expect(messageObj.attachments[0].toJSON()).toEqual(_conversationMessage.attachments[0].toJSON());
+    expect(messageObj.attachments.length).toBe(0);
     expect(messageObj.mentionedUserIds[0]).toBe(_conversationMessage.mentionedUserIds[0]);
 
     expect(messageObj.conversationId).toBe(_conversation._id);
@@ -140,6 +171,21 @@ describe('Conversation db', () => {
 
     // check if message count increase
     expect(afterConversationObj.messageCount).toBe(2);
+
+    // Do not update conversation message count when bot message
+    _doc.fromBot = true;
+    _doc.content = 'content';
+    _doc.conversationId = messageObj.conversationId;
+
+    let conversation = await Conversations.getConversation(_doc.conversationId);
+    const prevMessageCount = conversation.messageCount;
+
+    await ConversationMessages.addMessage(_doc, _user);
+
+    conversation = await Conversations.getConversation(_doc.conversationId);
+    const updatedMessageCount = conversation.messageCount;
+
+    expect(prevMessageCount).toBe(updatedMessageCount);
   });
 
   // if user assigned to conversation
@@ -229,9 +275,28 @@ describe('Conversation db', () => {
     expect(conversationObj.status).toBe('open');
   });
 
+  test('Resolve all conversation', async () => {
+    // try closing ========================
+    const updated = await Conversations.resolveAllConversation({}, _user._id);
+
+    const conversationObj = await Conversations.findOne({
+      _id: _conversation._id,
+    });
+
+    if (!conversationObj) {
+      throw new Error('Conversation not found');
+    }
+
+    const conversationCount = await Conversations.find().count();
+
+    expect(conversationObj.closedAt).toEqual(expect.any(Date));
+    expect(conversationObj.status).toBe('closed');
+    expect(updated.nModified).toBe(conversationCount);
+  });
+
   test('Conversation mark as read', async () => {
     // first user read this conversation
-    _conversation.readUserIds = '';
+    _conversation.readUserIds = [];
     await _conversation.save();
 
     await Conversations.markAsReadConversation(_conversation._id, _user._id);
@@ -245,6 +310,12 @@ describe('Conversation db', () => {
     }
 
     expect(conversationObj.readUserIds).toContain(_user._id);
+
+    // if current user is in read users list
+    _conversation.readUserIds = [_user._id];
+    await _conversation.save();
+
+    await Conversations.markAsReadConversation(_conversation._id, _user._id);
 
     const secondUser = await userFactory({});
 
@@ -260,6 +331,8 @@ describe('Conversation db', () => {
   });
 
   test('Conversation message', async () => {
+    await conversationMessageFactory({ conversationId: _conversation._id, internal: false });
+
     // non answered messages =========
     const nonAnweredMessage = await ConversationMessages.getNonAsnweredMessage(_conversation._id);
 
@@ -273,7 +346,7 @@ describe('Conversation db', () => {
 
     const adminMessages = await ConversationMessages.getAdminMessages(_conversation._id);
 
-    expect(adminMessages.length).toBe(1);
+    expect(adminMessages.length).toBe(2);
 
     // mark sent as read messages ==================
     await ConversationMessages.updateMany(
@@ -346,9 +419,77 @@ describe('Conversation db', () => {
       customerId: customer._id,
     });
 
-    await Conversations.removeCustomerConversations(customer._id);
+    await conversationFactory({
+      customerId: customer._id,
+    });
+
+    await Conversations.removeCustomersConversations([customer._id]);
 
     expect(await Conversations.find({ customerId: customer._id })).toHaveLength(0);
     expect(await ConversationMessages.find({ conversationId: conversation._id })).toHaveLength(0);
+  });
+
+  test('forceReadCustomerPreviousEngageMessages', async () => {
+    const customerId = '_id';
+
+    // isCustomRead is defined ===============
+    await conversationMessageFactory({
+      customerId,
+      engageData: engageDataFactory({ messageId: '_id' }),
+      isCustomerRead: false,
+    });
+
+    await ConversationMessages.forceReadCustomerPreviousEngageMessages(customerId);
+
+    let messages = await ConversationMessages.find({
+      customerId,
+      engageData: { $exists: true },
+      isCustomerRead: true,
+    });
+
+    expect(messages.length).toBe(1);
+
+    // isCustomRead is undefined ===============
+    await ConversationMessages.deleteMany({});
+
+    await conversationMessageFactory({
+      customerId,
+      engageData: engageDataFactory({ messageId: '_id' }),
+    });
+
+    await ConversationMessages.forceReadCustomerPreviousEngageMessages(customerId);
+
+    messages = await ConversationMessages.find({
+      customerId,
+      engageData: { $exists: true },
+      isCustomerRead: true,
+    });
+
+    expect(messages.length).toBe(1);
+  });
+
+  test('widgetsUnreadMessagesQuery', async () => {
+    const conversation = await conversationFactory({});
+
+    const response = await Conversations.widgetsUnreadMessagesQuery([conversation]);
+
+    expect(JSON.stringify(response)).toBe(
+      JSON.stringify({
+        conversationId: { $in: [conversation._id] },
+        userId: { $exists: true },
+        internal: false,
+        isCustomerRead: { $ne: true },
+      }),
+    );
+  });
+
+  test('updateConversation', async () => {
+    const conversation = await conversationFactory({});
+
+    await Conversations.updateConversation(conversation._id, { content: 'updated' });
+
+    const updated = await Conversations.findOne({ _id: conversation._id });
+
+    expect(updated && updated.content).toBe('updated');
   });
 });

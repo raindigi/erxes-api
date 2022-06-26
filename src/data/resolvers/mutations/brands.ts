@@ -1,8 +1,9 @@
 import { Brands } from '../../../db/models';
 import { IBrand, IBrandEmailConfig } from '../../../db/models/definitions/brands';
-import { IUserDocument } from '../../../db/models/definitions/users';
+import { MODULE_NAMES } from '../../constants';
+import { putCreateLog, putDeleteLog, putUpdateLog } from '../../logUtils';
 import { moduleCheckPermission } from '../../permissions/wrappers';
-import { putCreateLog, putDeleteLog, putUpdateLog } from '../../utils';
+import { IContext } from '../../types';
 
 interface IBrandsEdit extends IBrand {
   _id: string;
@@ -12,15 +13,14 @@ const brandMutations = {
   /**
    * Create new brand
    */
-  async brandsAdd(_root, doc: IBrand, { user }: { user: IUserDocument }) {
+  async brandsAdd(_root, doc: IBrand, { user }: IContext) {
     const brand = await Brands.createBrand({ userId: user._id, ...doc });
 
     await putCreateLog(
       {
-        type: 'brand',
-        newData: JSON.stringify(doc),
+        type: MODULE_NAMES.BRAND,
+        newData: { ...doc, userId: user._id },
         object: brand,
-        description: `${doc.name} has been created`,
       },
       user,
     );
@@ -31,21 +31,18 @@ const brandMutations = {
   /**
    * Update brand
    */
-  async brandsEdit(_root, { _id, ...fields }: IBrandsEdit, { user }: { user: IUserDocument }) {
-    const brand = await Brands.findOne({ _id });
+  async brandsEdit(_root, { _id, ...fields }: IBrandsEdit, { user }: IContext) {
+    const brand = await Brands.getBrand(_id);
     const updated = await Brands.updateBrand(_id, fields);
 
-    if (brand) {
-      await putUpdateLog(
-        {
-          type: 'brand',
-          object: brand,
-          newData: JSON.stringify(fields),
-          description: `${fields.name} has been edited`,
-        },
-        user,
-      );
-    }
+    await putUpdateLog(
+      {
+        type: MODULE_NAMES.BRAND,
+        object: brand,
+        newData: fields,
+      },
+      user,
+    );
 
     return updated;
   },
@@ -53,20 +50,11 @@ const brandMutations = {
   /**
    * Delete brand
    */
-  async brandsRemove(_root, { _id }: { _id: string }, { user }: { user: IUserDocument }) {
-    const brand = await Brands.findOne({ _id });
+  async brandsRemove(_root, { _id }: { _id: string }, { user }: IContext) {
+    const brand = await Brands.getBrand(_id);
     const removed = await Brands.removeBrand(_id);
 
-    if (brand && removed) {
-      await putDeleteLog(
-        {
-          type: 'brand',
-          object: brand,
-          description: `${brand.name} has been removed`,
-        },
-        user,
-      );
-    }
+    await putDeleteLog({ type: MODULE_NAMES.BRAND, object: brand }, user);
 
     return removed;
   },
@@ -77,21 +65,20 @@ const brandMutations = {
   async brandsConfigEmail(
     _root,
     { _id, emailConfig }: { _id: string; emailConfig: IBrandEmailConfig },
-    { user }: { user: IUserDocument },
+    { user }: IContext,
   ) {
-    const brand = await Brands.findOne({ _id });
+    const brand = await Brands.getBrand(_id);
     const updated = await Brands.updateEmailConfig(_id, emailConfig);
 
-    if (brand) {
-      await putUpdateLog(
-        {
-          type: 'brand',
-          object: brand,
-          description: `${brand.name} email config has been changed`,
-        },
-        user,
-      );
-    }
+    await putUpdateLog(
+      {
+        type: MODULE_NAMES.BRAND,
+        object: brand,
+        newData: { emailConfig },
+        description: `${brand.name} email config has been changed`,
+      },
+      user,
+    );
 
     return updated;
   },

@@ -1,4 +1,10 @@
 export const types = `
+  type EngageMessageSms {
+    from: String,
+    content: String!
+    fromIntegrationId: String
+  }
+
   type EngageMessage {
     _id: String!
     kind: String
@@ -12,15 +18,17 @@ export const types = `
     isDraft: Boolean
     isLive: Boolean
     stopDate: Date
-    createdDate: Date
+    createdAt: Date
     type: String
     messengerReceivedCustomerIds: [String]
-    stats: JSON
+    totalCustomersCount: Int
+    validCustomersCount: Int
+
     brand: Brand
 
     email: JSON
     messenger: JSON
-    deliveryReports: JSON
+    shortMessage: EngageMessageSms
 
     scheduleDate: EngageScheduleDate
     segments: [Segment]
@@ -28,25 +36,44 @@ export const types = `
     brands: [Brand]
     fromUser: User
     getTags: [Tag]
+    fromIntegration: Integration
+
+    stats: JSON
+    logs: JSON
+    smsStats: JSON
   }
 
   type EngageScheduleDate {
     type: String,
     month: String,
     day: String,
-    time: Date,
+  }
+
+  type DeliveryReport {
+    _id: String!,
+    customerId: String,
+    mailId: String,
+    status: String,
+    engage: EngageMessage,
+    createdAt: Date
+  }
+
+  type EngageDeliveryReport {
+    list: [DeliveryReport]
+    totalCount: Int
   }
 
   input EngageScheduleDateInput {
     type: String,
     month: String,
     day: String,
-    time: Date,
   }
 
   input EngageMessageEmail {
     content: String,
     subject: String!,
+    replyTo: String,
+    sender: String,
     attachments: [JSON]
     templateId: String
   }
@@ -57,6 +84,12 @@ export const types = `
     sentAs: String,
     content: String,
     rules: [InputRule],
+  }
+
+  input EngageMessageSmsInput {
+    from: String,
+    content: String!
+    fromIntegrationId: String!
   }
 `;
 
@@ -77,13 +110,16 @@ export const queries = `
   engageMessagesTotalCount(${listParams}): Int
   engageMessageDetail(_id: String): EngageMessage
   engageMessageCounts(name: String!, kind: String, status: String): JSON
+  engagesConfigDetail: JSON
+  engageVerifiedEmails: [String]
+  engageReportsList(page: Int, perPage: Int): EngageDeliveryReport 
 `;
 
 const commonParams = `
   title: String!,
   kind: String!,
   method: String!,
-  fromUserId: String!,
+  fromUserId: String,
   isDraft: Boolean,
   isLive: Boolean,
   stopDate: Date,
@@ -96,6 +132,7 @@ const commonParams = `
   email: EngageMessageEmail,
   scheduleDate: EngageScheduleDateInput,
   messenger: EngageMessageMessenger,
+  shortMessage: EngageMessageSmsInput
 `;
 
 export const mutations = `
@@ -105,4 +142,8 @@ export const mutations = `
   engageMessageSetLive(_id: String!): EngageMessage
   engageMessageSetPause(_id: String!): EngageMessage
   engageMessageSetLiveManual(_id: String!): EngageMessage
+  engagesUpdateConfigs(configsMap: JSON!): JSON
+  engageMessageVerifyEmail(email: String!): String
+  engageMessageRemoveVerifiedEmail(email: String!): String
+  engageMessageSendTestEmail(from: String!, to: String!, content: String!): String
 `;

@@ -1,15 +1,23 @@
 import { Tasks } from '../../../db/models';
 import { checkPermission, moduleRequireLogin } from '../../permissions/wrappers';
+import { IContext } from '../../types';
 import { IListParams } from './boards';
-import { generateTaskCommonFilters } from './boardUtils';
+import {
+  archivedItems,
+  archivedItemsCount,
+  checkItemPermByUser,
+  generateSort,
+  generateTaskCommonFilters,
+  IArchiveArgs,
+} from './boardUtils';
 
 const taskQueries = {
   /**
    * Tasks list
    */
-  async tasks(_root, args: IListParams) {
-    const filter = await generateTaskCommonFilters(args);
-    const sort = { order: 1, createdAt: -1 };
+  async tasks(_root, args: IListParams, { user, commonQuerySelector }: IContext) {
+    const filter = { ...commonQuerySelector, ...(await generateTaskCommonFilters(user._id, args)) };
+    const sort = generateSort(args);
 
     return Tasks.find(filter)
       .sort(sort)
@@ -18,10 +26,23 @@ const taskQueries = {
   },
 
   /**
+   * Archived list
+   */
+  archivedTasks(_root, args: IArchiveArgs) {
+    return archivedItems(args, Tasks);
+  },
+
+  archivedTasksCount(_root, args: IArchiveArgs) {
+    return archivedItemsCount(args, Tasks);
+  },
+
+  /**
    * Tasks detail
    */
-  taskDetail(_root, { _id }: { _id: string }) {
-    return Tasks.findOne({ _id });
+  async taskDetail(_root, { _id }: { _id: string }, { user }: IContext) {
+    const task = await Tasks.getTask(_id);
+
+    return checkItemPermByUser(user._id, task);
   },
 };
 

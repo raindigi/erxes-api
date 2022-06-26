@@ -1,7 +1,9 @@
+import * as sinon from 'sinon';
 import { graphqlRequest } from '../db/connection';
 import { brandFactory, engageMessageFactory, segmentFactory, tagsFactory, userFactory } from '../db/factories';
 import { Brands, EngageMessages, Segments, Tags, Users } from '../db/models';
 
+import { EngagesAPI } from '../data/dataSources';
 import './setup.ts';
 
 describe('engageQueries', () => {
@@ -25,27 +27,6 @@ describe('engageQueries', () => {
         ids: $ids
       ) {
         _id
-        kind
-        segmentIds
-        brandIds
-        tagIds
-        customerIds
-        title
-        fromUserId
-        method
-        isDraft
-        isLive
-        stopDate
-        createdDate
-        messengerReceivedCustomerIds
-
-        email
-        messenger
-        deliveryReports
-
-        segments { _id }
-        fromUser { _id }
-        getTags { _id }
       }
     }
   `;
@@ -56,6 +37,12 @@ describe('engageQueries', () => {
     }
   `;
 
+  let dataSources;
+
+  beforeEach(async () => {
+    dataSources = { EngagesAPI: new EngagesAPI() };
+  });
+
   afterEach(async () => {
     // Clearing test data
     await EngageMessages.deleteMany({});
@@ -63,6 +50,16 @@ describe('engageQueries', () => {
     await Tags.deleteMany({});
     await Brands.deleteMany({});
     await Segments.deleteMany({});
+  });
+
+  test('Engage messages', async () => {
+    await engageMessageFactory({});
+    await engageMessageFactory({});
+    await engageMessageFactory({});
+
+    const responses = await graphqlRequest(qryEngageMessages, 'engageMessages');
+
+    expect(responses.length).toBe(3);
   });
 
   test('Engage messages filtered by ids', async () => {
@@ -168,6 +165,43 @@ describe('engageQueries', () => {
     expect(response.length).toBe(2);
   });
 
+  test('Enage email delivery report list', async () => {
+    const dataSourceMock = sinon.stub(dataSources.EngagesAPI, 'engageReportsList').callsFake(() => {
+      return Promise.resolve({
+        list: [
+          {
+            _id: '123',
+            status: 'pending',
+          },
+        ],
+        totalCount: 1,
+      });
+    });
+
+    const query = `
+      query engageReportsList($page: Int, $perPage: Int) {
+        engageReportsList(page: $page, perPage: $perPage) {
+          totalCount
+          list {
+            _id
+            status
+            createdAt
+            customerId
+            engage {
+              title
+            }
+          }
+        }
+      }
+    `;
+
+    const response = await graphqlRequest(query, 'engageReportsList', {}, { dataSources });
+
+    expect(response.list.length).toBe(1);
+
+    dataSourceMock.restore();
+  });
+
   test('Engage message detail', async () => {
     const engageMessage = await engageMessageFactory();
 
@@ -175,13 +209,49 @@ describe('engageQueries', () => {
       query engageMessageDetail($_id: String) {
         engageMessageDetail(_id: $_id) {
           _id
+          kind
+          segmentIds
+          brandIds
+          tagIds
+          customerIds
+          title
+          fromUserId
+          method
+          isDraft
+          isLive
+          stopDate
+          createdAt
+          messengerReceivedCustomerIds
+
+          email
+          messenger
+
+          brands { _id }
+          segments { _id }
+          brand { _id }
+          tags { _id }
+          fromUser { _id }
+          getTags { _id }
+
+          stats
+          logs
+          smsStats
         }
       }
     `;
 
-    const response = await graphqlRequest(qry, 'engageMessageDetail', { _id: engageMessage._id });
+    let response = await graphqlRequest(qry, 'engageMessageDetail', { _id: engageMessage._id }, { dataSources });
 
     expect(response._id).toBe(engageMessage._id);
+
+    const brand = await brandFactory();
+    const messenger = { brandId: brand._id, content: 'Content' };
+    const engageMessageWithBrand = await engageMessageFactory({ messenger });
+
+    response = await graphqlRequest(qry, 'engageMessageDetail', { _id: engageMessageWithBrand._id }, { dataSources });
+
+    expect(response._id).toBe(engageMessageWithBrand._id);
+    expect(response.brand._id).toBe(brand._id);
   });
 
   test('Count engage messsage by kind', async () => {
@@ -220,34 +290,46 @@ describe('engageQueries', () => {
     expect(response.draft).toBe(1);
     expect(response.paused).toBe(1);
 
-    response = await graphqlRequest(qryCount, 'engageMessageCounts', { name: 'status', kind: 'manual' }, { user });
+    response = await graphqlRequest(qryCount, 'engageMessageCounts', { name: 'status' }, { user });
 
-    expect(response.paused).toBe(3);
+    expect(response.paused).toBe(4);
     expect(response.yours).toBe(1);
   });
 
   test('Count engage message by tag', async () => {
     const tag = await tagsFactory();
+    const user = await userFactory();
 
     // default value of isLive, isDraft are 'false'
     await engageMessageFactory({ kind: 'auto' });
     await engageMessageFactory({ kind: 'auto' });
+    await engageMessageFactory({ kind: 'auto', tagIds: [tag._id], isLive: true });
+    await engageMessageFactory({ kind: 'auto', tagIds: [tag._id], isDraft: true, isLive: true });
     await engageMessageFactory({ kind: 'auto', tagIds: [tag._id] });
-    await engageMessageFactory({ kind: 'auto', tagIds: [tag._id] });
+    await engageMessageFactory({ kind: 'auto', tagIds: [tag._id], userId: user._id });
 
-    let response = await graphqlRequest(qryCount, 'engageMessageCounts', {
-      name: 'tag',
-      kind: 'auto',
-    });
+    const args: any = { name: 'tag', kind: 'auto' };
 
+    args.status = 'live';
+    let response = await graphqlRequest(qryCount, 'engageMessageCounts', args);
     expect(response[tag._id]).toBe(2);
 
-    response = await graphqlRequest(qryCount, 'engageMessageCounts', {
-      name: 'tag',
-      kind: 'manual',
-    });
+    args.status = 'draft';
+    response = await graphqlRequest(qryCount, 'engageMessageCounts', args);
+    expect(response[tag._id]).toBe(1);
 
-    expect(response[tag._id]).toBe(0);
+    args.status = 'paused';
+    response = await graphqlRequest(qryCount, 'engageMessageCounts', args);
+    expect(response[tag._id]).toBe(2);
+
+    args.status = 'yours';
+    response = await graphqlRequest(qryCount, 'engageMessageCounts', args, { user });
+    expect(response[tag._id]).toBe(1);
+
+    args.kind = '';
+    args.status = '';
+    response = await graphqlRequest(qryCount, 'engageMessageCounts', args, { user });
+    expect(response[tag._id]).toBe(4);
   });
 
   test('Get total count of engage message', async () => {
@@ -264,5 +346,35 @@ describe('engageQueries', () => {
     const response = await graphqlRequest(qry, 'engageMessagesTotalCount');
 
     expect(response).toBe(3);
+  });
+
+  test('Get verified emails', async () => {
+    const qry = `
+      query engageVerifiedEmails {
+        engageVerifiedEmails
+      }
+    `;
+
+    const mock = sinon.stub(dataSources.EngagesAPI, 'engagesGetVerifiedEmails').callsFake(() => {
+      return Promise.resolve([]);
+    });
+
+    await graphqlRequest(qry, 'engageVerifiedEmails', {}, { dataSources });
+
+    mock.restore();
+  });
+
+  test('configDetail', async () => {
+    const qry = `
+      query engagesConfigDetail {
+        engagesConfigDetail
+      }
+    `;
+
+    try {
+      await graphqlRequest(qry, 'engagesConfigDetail', {}, { dataSources });
+    } catch (e) {
+      expect(e[0].message).toBe('Engages api is not running');
+    }
   });
 });

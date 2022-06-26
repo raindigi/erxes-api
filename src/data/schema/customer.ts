@@ -1,3 +1,5 @@
+import { conformityQueryFields } from './common';
+
 // TODO: remove customer's email and phone field after customCommand
 
 export const types = `
@@ -6,23 +8,17 @@ export const types = `
     status: String!
   }
 
-  type CustomerLinks {
-    linkedIn: String
-    twitter: String
-    facebook: String
-    youtube: String
-    github: String
-    website: String
-  }
-
   type Customer {
     _id: String!
+    state: String
     createdAt: Date
     modifiedAt: Date
     avatar: String
     integrationId: String
     firstName: String
     lastName: String
+    birthDate: Date
+    sex: Int
 
     email: String
     primaryEmail: String
@@ -31,30 +27,33 @@ export const types = `
     phones: [String]
 
     phone: String
-    isUser: Boolean
     tagIds: [String]
     remoteAddress: String
     internalNotes: JSON
     location: JSON
     visitorContactInfo: JSON
     customFieldsData: JSON
-    messengerData: JSON
+    trackedData: JSON
     ownerId: String
     position: String
     department: String
     leadStatus: String
-    lifecycleState: String
     hasAuthority: String
     description: String
     doNotDisturb: String
+    code: String
+    emailValidationStatus: String
+    phoneValidationStatus: String
+    
+    isOnline: Boolean
+    lastSeenAt: Date
+    sessionCount: Int
+    urlVisits: [JSON]
 
     integration: Integration
-    links: CustomerLinks
+    links: JSON
     companies: [Company]
     conversations: [Conversation]
-    deals: [Deal]
-    getIntegrationData: JSON
-    getMessengerCustomData: JSON
     getTags: [Tag]
     owner: User
   }
@@ -69,27 +68,30 @@ const queryParams = `
   page: Int
   perPage: Int
   segment: String
-  type: String 
+  type: String
   tag: String
   ids: [String]
   searchValue: String
+  autoCompletion: Boolean
+  autoCompletionType: String
   brand: String
   integration: String
   form: String
   startDate: String
   endDate: String
-  lifecycleState: String
   leadStatus: String
   sortField: String
   sortDirection: Int
+  sex:Int
+  birthDate: Date
+  ${conformityQueryFields}
 `;
 
 export const queries = `
   customersMain(${queryParams}): CustomersListResponse
   customers(${queryParams}): [Customer]
-  customerCounts(${queryParams}, byFakeSegment: JSON, only: String): JSON
+  customerCounts(${queryParams}, only: String): JSON
   customerDetail(_id: String!): Customer
-  customerListForSegmentPreview(segment: JSON, limit: Int): [Customer]
 `;
 
 const fields = `
@@ -104,18 +106,24 @@ const fields = `
   position: String
   department: String
   leadStatus: String
-  lifecycleState:  String
   hasAuthority: String
   description: String
   doNotDisturb: String
   links: JSON
   customFieldsData: JSON
+  code: String
+  sex: Int
+  birthDate: Date
+  emailValidationStatus: String
+  phoneValidationStatus: String
 `;
 
 export const mutations = `
-  customersAdd(${fields}): Customer
+  customersAdd(state: String, ${fields}): Customer
   customersEdit(_id: String!, ${fields}): Customer
-  customersEditCompanies(_id: String!, companyIds: [String]): Customer
   customersMerge(customerIds: [String], customerFields: JSON): Customer
   customersRemove(customerIds: [String]): [String]
+  customersChangeState(_id: String!, value: String!): Customer
+  customersVerify(verificationType:String!): String
+  customersChangeVerificationStatus(customerIds: [String], type: String!, status: String!): [Customer]
 `;

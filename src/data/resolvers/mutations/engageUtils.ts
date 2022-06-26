@@ -1,4 +1,5 @@
 import * as Random from 'meteor-random';
+import { Transform, Writable } from 'stream';
 import {
   ConversationMessages,
   Conversations,
@@ -8,145 +9,79 @@ import {
   Segments,
   Users,
 } from '../../../db/models';
-import { METHODS } from '../../../db/models/definitions/constants';
+import { CONVERSATION_STATUSES, KIND_CHOICES, METHODS } from '../../../db/models/definitions/constants';
 import { ICustomerDocument } from '../../../db/models/definitions/customers';
 import { IEngageMessageDocument } from '../../../db/models/definitions/engages';
 import { IUserDocument } from '../../../db/models/definitions/users';
-import { INTEGRATION_KIND_CHOICES, MESSAGE_KINDS } from '../../constants';
-import QueryBuilder from '../../modules/segments/queryBuilder';
-import { createTransporter, getEnv } from '../../utils';
+import { debugBase } from '../../../debuggers';
+import messageBroker from '../../../messageBroker';
+import { MESSAGE_KINDS } from '../../constants';
+import { fetchBySegments } from '../../modules/segments/queryBuilder';
+import { chunkArray, replaceEditorAttributes } from '../../utils';
 
-/**
- * Dynamic content tags
- */
-export const replaceKeys = ({
-  content,
-  customer,
-  user,
-}: {
-  content: string;
-  customer: ICustomerDocument;
+interface IEngageParams {
+  engageMessage: IEngageMessageDocument;
+  customersSelector: any;
   user: IUserDocument;
-}): string => {
-  let result = content;
+}
 
-  let customerName = customer.firstName || customer.lastName || 'Customer';
-
-  if (customer.firstName && customer.lastName) {
-    customerName = `${customer.firstName} ${customer.lastName}`;
-  }
-
-  const details = user.details ? user.details.toJSON() : {};
-
-  // replace customer fields
-  result = result.replace(/{{\s?customer.name\s?}}/gi, customerName);
-  result = result.replace(/{{\s?customer.email\s?}}/gi, customer.primaryEmail || '');
-
-  // replace user fields
-  result = result.replace(/{{\s?user.fullName\s?}}/gi, details.fullName || '');
-  result = result.replace(/{{\s?user.position\s?}}/gi, details.position || '');
-  result = result.replace(/{{\s?user.email\s?}}/gi, user.email || '');
-
-  return result;
-};
-
-/**
- * Find customers
- */
-const findCustomers = async ({
+export const generateCustomerSelector = async ({
   customerIds,
   segmentIds = [],
   tagIds = [],
   brandIds = [],
 }: {
-  customerIds: string[];
+  customerIds?: string[];
   segmentIds?: string[];
   tagIds?: string[];
   brandIds?: string[];
-}): Promise<ICustomerDocument[]> => {
+}): Promise<any> => {
   // find matched customers
-  let customerQuery: any = { _id: { $in: customerIds || [] } };
-  const doNotDisturbQuery = [{ doNotDisturb: 'No' }, { doNotDisturb: { $exists: false } }];
+  let customerQuery: any = {};
+
+  if (customerIds && customerIds.length > 0) {
+    customerQuery = { _id: { $in: customerIds } };
+  }
 
   if (tagIds.length > 0) {
-    customerQuery = { $or: doNotDisturbQuery, tagIds: { $in: tagIds || [] } };
+    customerQuery = { tagIds: { $in: tagIds } };
   }
 
   if (brandIds.length > 0) {
-    const integrationIds = await Integrations.find({ brandId: { $in: brandIds } }).distinct('_id');
+    let integrationIds: string[] = [];
 
-    customerQuery = { $or: doNotDisturbQuery, integrationId: { $in: integrationIds } };
+    for (const brandId of brandIds) {
+      const integrations = await Integrations.findIntegrations({ brandId });
+
+      integrationIds = [...integrationIds, ...integrations.map(i => i._id)];
+    }
+
+    customerQuery = { integrationId: { $in: integrationIds } };
   }
 
   if (segmentIds.length > 0) {
-    const segmentQueries: any = [];
-
     const segments = await Segments.find({ _id: { $in: segmentIds } });
 
+    let customerIdsBySegments: string[] = [];
+
     for (const segment of segments) {
-      const filter = await QueryBuilder.segments(segment);
+      const cIds = await fetchBySegments(segment);
 
-      filter.$or = doNotDisturbQuery;
-
-      segmentQueries.push(filter);
+      customerIdsBySegments = [...customerIdsBySegments, ...cIds];
     }
 
-    customerQuery = { $or: segmentQueries };
+    customerQuery = { _id: { $in: customerIdsBySegments } };
   }
 
-  return Customers.find(customerQuery);
+  return { $or: [{ doNotDisturb: 'No' }, { doNotDisturb: { $exists: false } }], ...customerQuery };
 };
 
-const executeSendViaEmail = async (
-  userEmail: string,
-  attachments: any,
-  customer: ICustomerDocument,
-  replacedSubject: string,
-  replacedContent: string,
-  AWS_SES_CONFIG_SET: string,
-  messageId: string,
-  mailMessageId: string,
-) => {
-  const transporter = await createTransporter({ ses: true });
-  let mailAttachment = [];
-
-  if (attachments.length > 0) {
-    mailAttachment = attachments.map(file => {
-      return {
-        filename: file.name || '',
-        path: file.url || '',
-      };
-    });
-  }
-
-  transporter.sendMail({
-    from: userEmail,
-    to: customer.primaryEmail,
-    subject: replacedSubject,
-    attachments: mailAttachment,
-    html: replacedContent,
-    headers: {
-      'X-SES-CONFIGURATION-SET': AWS_SES_CONFIG_SET,
-      EngageMessageId: messageId,
-      CustomerId: customer._id,
-      MailMessageId: mailMessageId,
-    },
-  });
+const sendQueueMessage = (args: any) => {
+  return messageBroker().sendMessage('erxes-api:engages-notification', args);
 };
-/**
- * Send via email
- */
-const sendViaEmail = async (message: IEngageMessageDocument) => {
-  const { fromUserId, tagIds, brandIds, segmentIds, customerIds = [] } = message;
 
-  if (!message.email) {
-    return;
-  }
-
-  const { subject, content, attachments = [] } = message.email.toJSON();
-
-  const AWS_SES_CONFIG_SET = getEnv({ name: 'AWS_SES_CONFIG_SET' });
-  const AWS_ENDPOINT = getEnv({ name: 'AWS_ENDPOINT' });
+export const send = async (engageMessage: IEngageMessageDocument) => {
+  const { customerIds, segmentIds, tagIds, brandIds, fromUserId } = engageMessage;
 
   const user = await Users.findOne({ _id: fromUserId });
 
@@ -154,131 +89,284 @@ const sendViaEmail = async (message: IEngageMessageDocument) => {
     throw new Error('User not found');
   }
 
-  const userEmail = user.email;
-  if (!userEmail) {
-    throw new Error(`email not found with ${userEmail}`);
+  if (!engageMessage.isLive) {
+    return;
   }
 
-  // find matched customers
-  const customers = await findCustomers({ customerIds, segmentIds, tagIds, brandIds });
+  const customersSelector = await generateCustomerSelector({ customerIds, segmentIds, tagIds, brandIds });
 
-  // save matched customer ids
-  EngageMessages.setCustomerIds(message._id, customers);
-
-  for (const customer of customers) {
-    let replacedContent = replaceKeys({ content, customer, user });
-
-    // Add unsubscribe link ========
-    const unSubscribeUrl = `${AWS_ENDPOINT}/unsubscribe/?cid=${customer._id}`;
-
-    replacedContent += `<div style="padding: 10px; color: #ccc; text-align: center; font-size:12px;">If you want to use service like this click <a style="text-decoration: underline; color: #ccc;" href="https://erxes.io" target="_blank">here</a> to read more. Also you can opt out from our email subscription <a style="text-decoration: underline;color: #ccc;" rel="noopener" target="_blank" href="${unSubscribeUrl}">here</a>.  <br>© 2019 erxes inc Growth Marketing Platform </div>`;
-
-    const mailMessageId = Random.id();
-
-    // add new delivery report
-    EngageMessages.addNewDeliveryReport(message._id, mailMessageId, customer._id);
-
-    // send email =========
-    utils.executeSendViaEmail(
-      userEmail,
-      attachments,
-      customer,
-      subject,
-      replacedContent,
-      AWS_SES_CONFIG_SET,
-      message._id,
-      mailMessageId,
-    );
+  if (engageMessage.method === METHODS.MESSENGER && engageMessage.kind !== MESSAGE_KINDS.VISITOR_AUTO) {
+    return sendViaMessenger({ engageMessage, customersSelector, user });
   }
+
+  if (engageMessage.method === METHODS.EMAIL) {
+    return sendEmailOrSms({ engageMessage, customersSelector, user }, 'sendEngage');
+  }
+
+  if (engageMessage.method === METHODS.SMS) {
+    return sendEmailOrSms({ engageMessage, customersSelector, user }, 'sendEngageSms');
+  }
+};
+
+// Prepares queue data to engages-email-sender
+const sendEmailOrSms = async (
+  { engageMessage, customersSelector, user }: IEngageParams,
+  action: 'sendEngage' | 'sendEngageSms',
+) => {
+  const engageMessageId = engageMessage._id;
+
+  await sendQueueMessage({
+    action: 'writeLog',
+    data: {
+      engageMessageId,
+      msg: `Run at ${new Date()}`,
+    },
+  });
+
+  const customerInfos: Array<{
+    _id: string;
+    primaryEmail?: string;
+    emailValidationStatus?: string;
+    phoneValidationStatus?: string;
+    primaryPhone?: string;
+    replacers: Array<{ key: string; value: string }>;
+  }> = [];
+  const emailConf = engageMessage.email ? engageMessage.email : { content: '' };
+  const emailContent = emailConf.content || '';
+
+  const { customerFields } = await replaceEditorAttributes({
+    content: emailContent,
+  });
+
+  const onFinishPiping = async () => {
+    if (engageMessage.kind === MESSAGE_KINDS.MANUAL && customerInfos.length === 0) {
+      await EngageMessages.deleteOne({ _id: engageMessage._id });
+      throw new Error('No customers found');
+    }
+
+    // save matched customers count
+    await EngageMessages.setCustomersCount(engageMessage._id, 'totalCustomersCount', customerInfos.length);
+
+    await sendQueueMessage({
+      action: 'writeLog',
+      data: {
+        engageMessageId,
+        msg: `Matched ${customerInfos.length} customers`,
+      },
+    });
+
+    await EngageMessages.setCustomersCount(engageMessage._id, 'validCustomersCount', customerInfos.length);
+
+    if (customerInfos.length > 0) {
+      const data: any = {
+        customers: [],
+        fromEmail: user.email,
+        engageMessageId,
+        shortMessage: engageMessage.shortMessage || {},
+      };
+
+      if (engageMessage.method === METHODS.EMAIL && engageMessage.email) {
+        const { replacedContent } = await replaceEditorAttributes({
+          customerFields,
+          content: emailContent,
+          user,
+        });
+
+        engageMessage.email.content = replacedContent;
+
+        data.email = engageMessage.email;
+      }
+
+      const chunks = chunkArray(customerInfos, 3000);
+
+      for (const chunk of chunks) {
+        data.customers = chunk;
+
+        await sendQueueMessage({ action, data });
+      }
+    }
+  };
+
+  const customerTransformerStream = new Transform({
+    objectMode: true,
+
+    async transform(customer: ICustomerDocument, _encoding, callback) {
+      const { replacers } = await replaceEditorAttributes({
+        content: emailContent,
+        customer,
+        customerFields,
+      });
+
+      customerInfos.push({
+        _id: customer._id,
+        primaryEmail: customer.primaryEmail,
+        emailValidationStatus: customer.emailValidationStatus,
+        phoneValidationStatus: customer.phoneValidationStatus,
+        primaryPhone: customer.primaryPhone,
+        replacers,
+      });
+
+      // signal upstream that we are ready to take more data
+      callback();
+    },
+  });
+
+  // generate fields option =======
+  const fieldsOption = {
+    primaryEmail: 1,
+    emailValidationStatus: 1,
+    phoneValidationStatus: 1,
+    primaryPhone: 1,
+  };
+
+  for (const field of customerFields || []) {
+    fieldsOption[field] = 1;
+  }
+
+  const customersStream = (Customers.find(customersSelector, fieldsOption) as any).stream();
+
+  return new Promise((resolve, reject) => {
+    const pipe = customersStream.pipe(customerTransformerStream);
+
+    pipe.on('finish', async () => {
+      try {
+        await onFinishPiping();
+      } catch (e) {
+        return reject(e);
+      }
+
+      resolve('done');
+    });
+  });
 };
 
 /**
  * Send via messenger
  */
-const sendViaMessenger = async (message: IEngageMessageDocument) => {
-  const { fromUserId, tagIds, brandIds, segmentIds, customerIds = [] } = message;
+const sendViaMessenger = async ({ engageMessage, customersSelector, user }: IEngageParams) => {
+  const { fromUserId, messenger, _id } = engageMessage;
 
-  if (!message.messenger) {
+  if (!messenger) {
     return;
   }
 
-  const { brandId, content = '' } = message.messenger;
-
-  const user = await Users.findOne({ _id: fromUserId });
-
-  if (!user) {
-    throw new Error('User not found');
-  }
+  const { brandId, content } = messenger;
 
   // find integration
   const integration = await Integrations.findOne({
     brandId,
-    kind: INTEGRATION_KIND_CHOICES.MESSENGER,
+    kind: KIND_CHOICES.MESSENGER,
   });
 
   if (integration === null) {
     throw new Error('Integration not found');
   }
 
-  // find matched customers
-  const customers = await findCustomers({ customerIds, segmentIds, tagIds, brandIds });
+  const bulkSize = 1000;
 
-  // save matched customer ids
-  EngageMessages.setCustomerIds(message._id, customers);
+  let iteratorCounter = 0;
+  let conversationsBulk = Conversations.collection.initializeOrderedBulkOp();
+  let conversationMessagesBulk = ConversationMessages.collection.initializeOrderedBulkOp();
 
-  for (const customer of customers) {
+  const customerFields = { firstName: 1, lastName: 1, primaryEmail: 1 };
+  const customersStream = (Customers.find(customersSelector, customerFields) as any).stream();
+
+  const executeBulks = () => {
+    return new Promise((resolve, reject) => {
+      /* istanbul ignore next */
+      conversationsBulk.execute(err => {
+        if (err) {
+          if (err.message === 'Invalid Operation, no operations specified') {
+            debugBase(`Error during execute bulk ${err.message}`);
+            return resolve('done');
+          }
+
+          return reject(err);
+        }
+
+        conversationMessagesBulk.execute(msgErr => {
+          if (msgErr) {
+            return reject(msgErr);
+          }
+
+          conversationsBulk = Conversations.collection.initializeOrderedBulkOp();
+          conversationMessagesBulk = ConversationMessages.collection.initializeOrderedBulkOp();
+
+          resolve('done');
+        });
+      });
+    });
+  };
+
+  const createConversations = async (customer: ICustomerDocument) => {
+    iteratorCounter++;
+
     // replace keys in content
-    const replacedContent = replaceKeys({ content, customer, user });
+    const { replacedContent } = await replaceEditorAttributes({ content, customer, user });
+
+    const now = new Date();
+    const conversationId = Random.id();
+
     // create conversation
-    const conversation = await Conversations.createConversation({
+    conversationsBulk.insert({
+      _id: conversationId,
+      status: CONVERSATION_STATUSES.NEW,
+      createdAt: now,
+      updatedAt: now,
       userId: fromUserId,
       customerId: customer._id,
       integrationId: integration._id,
       content: replacedContent,
+      messageCount: 1,
     });
 
     // create message
-    await ConversationMessages.createMessage({
+    conversationMessagesBulk.insert({
       engageData: {
-        messageId: message._id,
+        engageKind: 'auto',
+        messageId: _id,
         fromUserId,
-        ...message.messenger.toJSON(),
+        ...(messenger ? messenger.toJSON() : {}),
       },
-      conversationId: conversation._id,
+      internal: false,
+      conversationId,
       userId: fromUserId,
       customerId: customer._id,
       content: replacedContent,
     });
-  }
-};
 
-/*
- *  Send engage messages
- */
-export const send = (message: IEngageMessageDocument) => {
-  const { method, kind } = message;
+    /* istanbul ignore next */
+    if (iteratorCounter % bulkSize === 0) {
+      customersStream.pause();
 
-  if (method === METHODS.EMAIL) {
-    return sendViaEmail(message);
-  }
+      await executeBulks();
 
-  // when kind is visitor auto, do not do anything
-  if (method === METHODS.MESSENGER && kind !== MESSAGE_KINDS.VISITOR_AUTO) {
-    return sendViaMessenger(message);
-  }
-};
+      customersStream.resume();
+    }
+  };
 
-/*
- * Handle engage unsubscribe request
- */
-export const handleEngageUnSubscribe = (query: { cid: string }) =>
-  Customers.updateOne({ _id: query.cid }, { $set: { doNotDisturb: 'Yes' } });
+  const streamConversationWriter = new Writable({
+    objectMode: true,
 
-export const utils = {
-  executeSendViaEmail,
-};
+    async write(data, _encoding, callback) {
+      await createConversations(data);
 
-export default {
-  replaceKeys,
-  send,
-};
+      callback();
+    },
+  });
+
+  return new Promise(resolve => {
+    const pipe = customersStream.pipe(streamConversationWriter);
+
+    pipe.on('finish', async () => {
+      // save matched customers count
+      await EngageMessages.setCustomersCount(_id, 'totalCustomersCount', iteratorCounter);
+
+      if (iteratorCounter % bulkSize !== 0) {
+        await executeBulks();
+      }
+
+      resolve('done');
+    });
+  });
+}; // end sendViaMessenger()

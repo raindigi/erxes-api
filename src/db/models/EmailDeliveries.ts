@@ -1,9 +1,9 @@
 import { Model, model } from 'mongoose';
-import { ActivityLogs } from '.';
 import { emailDeliverySchema, IEmailDeliveries, IEmailDeliveriesDocument } from './definitions/emailDeliveries';
 
 export interface IEmailDeliveryModel extends Model<IEmailDeliveriesDocument> {
   createEmailDelivery(doc: IEmailDeliveries): Promise<IEmailDeliveriesDocument>;
+  updateEmailDeliveryStatus(_id: string, status: string): Promise<void>;
 }
 
 export const loadClass = () => {
@@ -12,12 +12,13 @@ export const loadClass = () => {
      * Create an EmailDelivery document
      */
     public static async createEmailDelivery(doc: IEmailDeliveries) {
-      const emailDelivery = await EmailDeliveries.create(doc);
+      return EmailDeliveries.create({
+        ...doc,
+      });
+    }
 
-      // create log
-      await ActivityLogs.createEmailDeliveryLog(emailDelivery);
-
-      return emailDelivery;
+    public static async updateEmailDeliveryStatus(_id: string, status: string) {
+      return EmailDeliveries.updateOne({ _id }, { $set: { status } });
     }
   }
 
