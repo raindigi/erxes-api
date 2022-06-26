@@ -37,7 +37,9 @@
     "runEsCommand": "ts-node ./src/commands/runEsCommand.ts",
     "trackTelemetry": "node ./dist/commands/trackTelemetry.js",
     "migrate": "NODE_ENV=command migrate --migrations-dir='./dist/migrations' --store='./db-migrate-store.js' up",
-    "release": "release-it"
+    "release": "release-it",
+    "prepare": "yarn run snyk-protect",
+    "snyk-protect": "snyk-protect"
   },
   "lint-staged": {
     "*.ts": [
@@ -46,7 +48,7 @@
     ]
   },
   "dependencies": {
-    "@google-cloud/pubsub": "^1.1.5",
+    "@google-cloud/pubsub": "^2.0.0",
     "@google-cloud/storage": "^4.0.0",
     "@types/cors": "^2.8.4",
     "@types/dotenv": "^4.0.3",
@@ -60,7 +62,7 @@
     "@types/mongoose": "^5.5.32",
     "@types/request": "^2.47.1",
     "@types/underscore": "^1.8.9",
-    "amqplib": "0.5.3",
+    "amqplib": "0.7.1",
     "apollo-datasource-rest": "^0.5.1",
     "apollo-server-express": "^2.9.7",
     "aws-sdk": "^2.151.0",
@@ -79,7 +81,7 @@
     "express": "^4.17.1",
     "faker": "^4.1.0",
     "file-type": "^10.4.0",
-    "firebase-admin": "^8.6.1",
+    "firebase-admin": "^9.4.2",
     "formidable": "^1.1.1",
     "generate-password": "^1.5.1",
     "git-repo-info": "^2.1.0",
@@ -104,18 +106,19 @@
     "request": "^2.88.0",
     "requestify": "^0.2.5",
     "sha256": "^0.2.0",
-    "shelljs": "^0.8.3",
+    "shelljs": "^0.8.5",
     "strip": "^3.0.0",
     "ts-node": "8.0.3",
     "underscore": "^1.8.3",
     "uuid": "^3.3.3",
     "uuid-by-string": "^3.0.2",
     "validator": "^9.0.0",
-    "vm2": "^3.9.2",
+    "vm2": "^3.9.6",
     "xlsx-populate": "^1.20.1",
     "xlsx-stream-reader": "^1.1.0",
-    "xss": "^1.0.6",
-    "migrate": "^1.6.2"
+    "xss": "^1.0.10",
+    "migrate": "^1.6.2",
+    "@snyk/protect": "latest"
   },
   "peerOptionalDependencies": {
     "kerberos": "^1.0.0"
@@ -141,5 +144,6 @@
   },
   "engines": {
     "node": ">=10.x.x"
-  }
+  },
+  "snyk": true
 }
