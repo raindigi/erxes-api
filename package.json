@@ -96,7 +96,7 @@
     "moment": "^2.18.1",
     "moment-timezone": "^0.5.31",
     "mongo-uri": "^0.1.2",
-    "mongoose": "5.7.5",
+    "mongoose": "6.4.6",
     "mongoose-type-email": "^1.0.5",
     "node-schedule": "^1.2.5",
     "nodemailer": "^4.1.3",
