@@ -79,7 +79,7 @@
     "express": "^4.17.1",
     "faker": "^4.1.0",
     "file-type": "^10.4.0",
-    "firebase-admin": "^8.6.1",
+    "firebase-admin": "^10.3.0",
     "formidable": "^1.1.1",
     "generate-password": "^1.5.1",
     "git-repo-info": "^2.1.0",
@@ -87,7 +87,7 @@
     "graphql-redis-subscriptions": "^1.4.0",
     "graphql-subscriptions": "^1.1.0",
     "graphql-tools": "^4.0.3",
-    "handlebars": "^4.7.3",
+    "handlebars": "^4.7.4",
     "helmet": "^3.23.3",
     "ioredis": "^3.2.2",
     "json2csv": "^5.0.1",
@@ -115,7 +115,7 @@
     "xlsx-populate": "^1.20.1",
     "xlsx-stream-reader": "^1.1.0",
     "xss": "^1.0.6",
-    "migrate": "^1.6.2"
+    "migrate": "^1.7.0"
   },
   "peerOptionalDependencies": {
     "kerberos": "^1.0.0"
