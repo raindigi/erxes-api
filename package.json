@@ -62,7 +62,7 @@
     "@types/underscore": "^1.8.9",
     "amqplib": "0.5.3",
     "apollo-datasource-rest": "^0.5.1",
-    "apollo-server-express": "^2.9.7",
+    "apollo-server-express": "^3.13.0",
     "aws-sdk": "^2.151.0",
     "bcryptjs": "^2.4.3",
     "cookie": "^0.4.1",
