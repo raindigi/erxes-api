@@ -3551,7 +3551,7 @@ diff-sequences@^24.9.0:
   resolved "https://registry.yarnpkg.com/diff-sequences/-/diff-sequences-24.9.0.tgz#5715d6244e2aa65f48bba0bc972db0b0b11e95b5"
   integrity sha512-Dj6Wk3tWyTE+Fo1rW8v0Xhwk80um6yFYKbuAxc9c3EZxIHFDYwbi34Uk42u1CdnIiVorvt4RmlSDjIPyzGC2ew==
 
-diff@^3.1.0, diff@^3.2.0, diff@^3.5.0:
+diff@^3.2.0, diff@^3.5.0:
   version "3.5.0"
   resolved "https://registry.yarnpkg.com/diff/-/diff-3.5.0.tgz#800c0dd1e0a8bfbc95835c202ad220fe317e5a12"
   integrity sha512-A46qtFgd+g7pDZinpnwiRJtxbC1hpgf0uzP3iG89scHk0AUC7A1TGxf5OiiOUv/JMZR8GOt8hL900hV0bOy5xA==
@@ -3669,10 +3669,10 @@ ee-first@1.1.1:
   resolved "https://registry.yarnpkg.com/ee-first/-/ee-first-1.1.1.tgz#590c61156b0ae2f4f0255732a158b266bc56b21d"
   integrity sha1-WQxhFWsK4vTwJVcyoViyZrxWsh0=
 
-elasticsearch@^16.6.0:
-  version "16.6.0"
-  resolved "https://registry.yarnpkg.com/elasticsearch/-/elasticsearch-16.6.0.tgz#ba6b6096269f205f6fcde4171424dcd67229febe"
-  integrity sha512-MhsdE2JaBJoV1EGzSkCqqhNGxafXJuhPr+eD3vbXmsk/QWhaiU12oyXF0VhjcL8+UlwTHv0CAUbyjtE1wqoIdw==
+elasticsearch@^16.7.3:
+  version "16.7.3"
+  resolved "https://registry.yarnpkg.com/elasticsearch/-/elasticsearch-16.7.3.tgz#bf0e1cc129ab2e0f06911953a1b1f3c740715fab"
+  integrity sha512-e9kUNhwnIlu47fGAr4W6yZJbkpsgQJB0TqNK8rCANe1J4P65B1sGnbCFTgcKY3/dRgCWnuP1AJ4obvzW604xEQ==
   dependencies:
     agentkeepalive "^3.4.1"
     chalk "^1.0.0"
@@ -10190,13 +10190,13 @@ ts-node@*:
     source-map-support "^0.5.6"
     yn "3.1.1"
 
-ts-node@8.0.3:
-  version "8.0.3"
-  resolved "https://registry.yarnpkg.com/ts-node/-/ts-node-8.0.3.tgz#aa60b836a24dafd8bf21b54766841a232fdbc641"
-  integrity sha512-2qayBA4vdtVRuDo11DEFSsD/SFsBXQBRZZhbRGSIkmYmVkWjULn/GGMdG10KVqkaGndljfaTD8dKjWgcejO8YA==
+ts-node@8.1.1:
+  version "8.1.1"
+  resolved "https://registry.yarnpkg.com/ts-node/-/ts-node-8.1.1.tgz#2b9621934a0471f0e13c1b75be54ee0f46c31479"
+  integrity sha512-nd+mdxDP2BjQlyumBCMSU3IQLEjSla1X3uSzDfQ4M5OEZ3iDC01gjhs0FX29jyolATwLKB7YoRJ1Asbxd9EEoA==
   dependencies:
     arg "^4.1.0"
-    diff "^3.1.0"
+    diff "^4.0.1"
     make-error "^1.1.1"
     source-map-support "^0.5.6"
     yn "^3.0.0"
